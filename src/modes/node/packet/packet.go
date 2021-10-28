@@ -7,7 +7,8 @@ import (
 type PacketType byte
 
 const (
-	PacketTypeData PacketType = iota
+	_ PacketType = iota
+	PacketTypeData
 	PacketTypePing
 	PacketTypePong
 	PacketTypePongAesPresent
@@ -15,7 +16,7 @@ const (
 	PacketTypeExchangeResponse
 )
 
-const MTU = 1400
+const MTU = 65000
 
 /*
 # Data Packet

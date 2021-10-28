@@ -8,7 +8,7 @@ import (
 	"github.com/songgao/water/waterutil"
 )
 
-func GetAddr(b []byte) (srcAddr string, dstAddr string) {
+func GetAddr(b []byte) (srcAddr string, dstAddr string, isTcp bool) {
 	defer func() {
 		if err := recover(); err != nil {
 			logrus.Info("failed to get addr: ", err)
@@ -24,13 +24,13 @@ func GetAddr(b []byte) (srcAddr string, dstAddr string) {
 		src := strings.Join([]string{srcIp.To4().String(), strconv.FormatUint(uint64(srcPort), 10)}, ":")
 		dst := strings.Join([]string{dstIp.To4().String(), strconv.FormatUint(uint64(dstPort), 10)}, ":")
 		//logrus.Printf("%s->%v", src, dst)
-		return src, dst
+		return src, dst, waterutil.IPv4Protocol(b) == waterutil.TCP
 	} else if waterutil.IPv4Protocol(b) == waterutil.ICMP {
 		srcIp := waterutil.IPv4Source(b)
 		dstIp := waterutil.IPv4Destination(b)
-		return srcIp.To4().String(), dstIp.To4().String()
+		return srcIp.To4().String(), dstIp.To4().String(), false
 	}
-	return "", ""
+	return "", "", false
 }
 
 func RemovePort(addr string) string {
