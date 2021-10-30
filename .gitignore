@@ -24,3 +24,5 @@ scripts/client.sh
 *.yaml
 !.protolint.yaml
 !example.*.yaml
+
+!.github/**/*

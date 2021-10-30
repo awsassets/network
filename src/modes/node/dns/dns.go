@@ -124,8 +124,8 @@ func (d *DNS) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 	if !answer {
 		m := &dns.Msg{}
 		m.SetRcode(r, dns.RcodeServerFailure)
-		w.WriteMsg(m)
+		_ = w.WriteMsg(m)
 	} else {
-		w.WriteMsg(m)
+		_ = w.WriteMsg(m)
 	}
 }
