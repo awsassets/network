@@ -58,8 +58,9 @@ type Conn struct {
 	aes   *aes.AesStore
 	ourIP *string
 
-	deleted  bool
-	lastUsed time.Time
+	deleted     bool
+	lastUsed    time.Time
+	lastWarnTCP time.Time
 }
 
 func (c *ConnStore) Stop(ip string) {
@@ -455,7 +456,13 @@ func (c *Conn) WriteUDP(data []byte) error {
 func (c *Conn) WriteTCP(data []byte) error {
 	if c.connTcp == nil {
 		// fallback to udp if we cannot use tcp
-		logrus.Warnf("using udp since tcp seems to be down on node %s - %s", c.name, c.ip)
+		if c.lastWarnTCP.Before(time.Now().Add(-time.Second * 5)) {
+			logrus.Warnf("using udp since tcp seems to be down on node %s - %s", c.name, c.ip)
+			c.lastWarnTCP = time.Now()
+		} else {
+			logrus.Debugf("using udp since tcp seems to be down on node %s - %s", c.name, c.ip)
+		}
+
 		return c.WriteUDP(data[2:])
 	}
 
