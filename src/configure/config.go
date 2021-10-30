@@ -36,8 +36,8 @@ func New() *Config {
 	config.SetConfigType("yaml")
 
 	b, err := defaultJson.Marshal(Config{
-		LogLevel:   "info",
-		ConfigFile: "config.yaml",
+		LogLevel: "info",
+		Config:   "config.yaml",
 	})
 
 	checkErr(err)
@@ -46,14 +46,14 @@ func New() *Config {
 	checkErr(tmp.ReadConfig(bytes.NewBuffer(b)))
 	checkErr(config.MergeConfigMap(tmp.AllSettings()))
 
-	pflag.String("config_file", "config.yaml", "Config file location")
+	pflag.String("config", "config.yaml", "Config file location")
 	pflag.String("create", "", "create a client/signal/relay-client/relay-server instance")
 	pflag.String("create_name", "", "name of the instanced created by --create")
 	pflag.Parse()
 	checkErr(config.BindPFlags(pflag.CommandLine))
 
-	config.SetConfigFile(config.GetString("config_file"))
-	if config.ReadInConfig() == nil {
+	config.SetConfigFile(config.GetString("config"))
+	if err := config.ReadInConfig(); err == nil {
 		checkErr(config.MergeInConfig())
 	}
 
@@ -84,8 +84,8 @@ func NewFromFile(cfg Config) *Config {
 	checkErr(tmp.ReadConfig(bytes.NewBuffer(b)))
 	checkErr(config.MergeConfigMap(tmp.AllSettings()))
 
-	if cfg.ConfigFile != "" {
-		config.SetConfigFile(cfg.ConfigFile)
+	if cfg.Config != "" {
+		config.SetConfigFile(cfg.Config)
 		if config.ReadInConfig() == nil {
 			checkErr(config.MergeInConfig())
 		}
@@ -110,7 +110,7 @@ type Config struct {
 	// standard
 	LogLevel   string `json:"log_level,omitempty" mapstructure:"log_level,omitempty" node:"log_level" signal:"log_level"`
 	Mode       Mode   `json:"mode,omitempty" mapstructure:"mode,omitempty" node:"mode" signal:"mode"`
-	ConfigFile string `json:"config_file,omitempty" mapstructure:"config_file,omitempty" node:"-" signal:"-"`
+	Config     string `json:"config,omitempty" mapstructure:"config,omitempty" node:"-" signal:"-"`
 	Create     Mode   `json:"create,omitempty" mapstructure:"create,omitempty" node:"-" signal:"-"`
 	CreateName string `json:"create_name,omitempty" mapstructure:"create_name,omitempty" node:"-" signal:"-"`
 
@@ -148,7 +148,7 @@ const (
 )
 
 func (s *Config) Save() error {
-	if s.ConfigFile == "" {
+	if s.Config == "" {
 		return nil
 	}
 
@@ -180,7 +180,7 @@ func (s *Config) Save() error {
 	}
 
 	tmp.SetConfigType("yaml")
-	tmp.SetConfigFile(s.ConfigFile)
+	tmp.SetConfigFile(s.Config)
 
 	return tmp.WriteConfig()
 }

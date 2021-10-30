@@ -4,23 +4,23 @@ import (
 	"bufio"
 	"context"
 	"crypto/ecdsa"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/x509"
-	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
-	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/disembark/network/src/configure"
 	"github.com/disembark/network/src/modes/node/aes"
 	"github.com/disembark/network/src/modes/node/conn"
+	"github.com/disembark/network/src/modes/node/dns"
+	"github.com/disembark/network/src/modes/node/network"
 	"github.com/disembark/network/src/modes/node/packet"
 	"github.com/disembark/network/src/modes/signal/client"
 	"github.com/disembark/network/src/modes/signal/node"
@@ -28,10 +28,9 @@ import (
 	"github.com/disembark/network/src/netutil"
 	"github.com/disembark/network/src/utils"
 	"github.com/ethereum/go-ethereum/crypto/ecies"
-	reuse "github.com/libp2p/go-reuseport"
 	"github.com/sirupsen/logrus"
-	"github.com/songgao/water"
 	"github.com/songgao/water/waterutil"
+	"golang.org/x/crypto/sha3"
 )
 
 type Node struct {
@@ -41,9 +40,10 @@ type Node struct {
 	state   types.JoinPayloadNode
 	ip      *string
 	config  *configure.Config
-	iface   *water.Interface
 	aes     *aes.AesStore
 	private *ecies.PrivateKey
+	network *network.NetworkInterface
+	dns     *dns.DNS
 
 	startTime int64
 }
@@ -61,7 +61,10 @@ func New(config *configure.Config) {
 		logrus.Fatal("failed to get udp socket:", err)
 	}
 
-	nodes := node.New()
+	netInt := network.CreateTun()
+
+	d := dns.New()
+	nodes := node.NewWithDns(d)
 
 	ip := ""
 
@@ -79,6 +82,8 @@ func New(config *configure.Config) {
 		ip:        ipp,
 		aes:       aes.New(),
 		private:   ecies.ImportECDSA(cert.(*ecdsa.PrivateKey)),
+		network:   netInt,
+		dns:       d,
 	}
 
 	done := make(chan struct{})
@@ -101,17 +106,17 @@ func New(config *configure.Config) {
 	go node.ProcessIface()
 	go node.ProcessSignal()
 
-	for i := 0; i < runtime.NumCPU(); i++ {
-		c, err := reuse.ListenPacket("udp", localAddr.String())
+	{
+		c, err := net.ListenUDP("udp", localAddr)
 		if err != nil {
 			log.Fatalln("failed to listen on udp socket:", err)
 		}
 		defer c.Close()
-		go node.ListenConn(c.(*net.UDPConn))
+		go node.ListenConn(c)
 	}
 
-	for i := 0; i < runtime.NumCPU(); i++ {
-		c, err := reuse.Listen("tcp", localAddr.String())
+	{
+		c, err := net.Listen("tcp", localAddr.String())
 		if err != nil {
 			log.Fatalln("failed to listen on udp socket:", err)
 		}
@@ -147,11 +152,7 @@ func (n *Node) ProcessSignal() {
 			n.config.SignalServers = pl.Signals
 			_ = n.config.Save()
 
-			if n.iface != nil {
-				_ = n.iface.Close()
-				n.iface = nil
-			}
-			n.iface = CreateTun(n.state.IP)
+			n.network.SetIP(pl.Current.IP)
 		case types.MessageTypeNodeRegister:
 			pl := types.MessageNodeRegister{}
 			if err := json.Unmarshal(msg.Payload, &pl); err != nil {
@@ -199,75 +200,72 @@ func (n *Node) ProcessSignal() {
 }
 
 func (r *Node) ListenConn(conn net.Conn) {
-	buf := make([]byte, packet.MTU+23) // first byte is a packet type.
 	defer conn.Close()
-	var connType string
-	type writeFn func([]byte) (int, error)
-	type readFn func() (writeFn, []byte, int, error)
+
+	connType := "tcp"
+	type writeFn func() error
+	type readFn func() (packet.Packet, error)
 
 	var read readFn
+	var write writeFn
+
 	isTCP := false
+
+	pc := packet.NewConstructor()
 
 	switch c := conn.(type) {
 	case *net.UDPConn:
 		connType = "udp"
-		read = func() (writeFn, []byte, int, error) {
-			n, addr, err := c.ReadFromUDP(buf[:len(buf)-2])
-			if err == io.EOF {
-				err = nil
-			}
-			return func(b []byte) (int, error) {
-				return c.WriteToUDP(b, addr)
-			}, buf[:n], n, err
+		var (
+			err  error
+			addr *net.UDPAddr
+		)
+		read = func() (packet.Packet, error) {
+			addr, err = pc.ReadUDP(c)
+			return pc.ToPacket(), err
+		}
+		write = func() error {
+			_, err := c.WriteToUDP(pc.ToUDP(), addr)
+			return err
 		}
 	case *net.TCPConn:
 		isTCP = true
-		bconn := bufio.NewReader(c)
-		read = func() (writeFn, []byte, int, error) {
-			n, err := io.ReadFull(bconn, buf[:2])
-			if err == io.EOF {
-				n, err = io.ReadFull(bconn, buf[:2])
-			}
-			if err != nil {
-				return nil, nil, n, err
-			}
+		bconn := bufio.NewReaderSize(c, packet.MTU*5)
 
-			b := buf[2 : binary.BigEndian.Uint16(buf[:2])+2]
-			n, err = io.ReadFull(bconn, b)
-			if err == io.EOF {
-				n, err = io.ReadFull(bconn, b)
-			}
+		read = func() (packet.Packet, error) {
+			err := pc.ReadTCP(bconn)
+			return pc.ToPacket(), err
+		}
 
-			return func(b []byte) (int, error) {
-				copy(buf[2:], b)
-				binary.BigEndian.PutUint16(buf[:2], uint16(len(b)))
-				return c.Write(buf[:len(b)+2])
-			}, b[:n], n, err
+		write = func() error {
+			_, err := c.Write(pc.ToTCP())
+			return err
 		}
 	}
 	for {
-		write, data, n, err := read()
+		pkt, err := read()
 		if err != nil {
-			logrus.Warn("read err: ", err)
 			if isTCP {
 				return
 			}
+			logrus.Warn("read err: ", err)
+			continue
 		}
-		switch packet.PacketType(data[0]) {
-		case packet.PacketTypeData:
-			if n < 5 {
-				logrus.Warn("bad packet length")
-				continue
-			}
-			// we must decrypt this packet.
-			ip := net.IPv4(data[1], data[2], data[3], data[4]).To4().String()
-			node, ok := r.nodes.GetNode(ip)
-			if !ok {
-				logrus.Error("unknown node conn: ", ip)
-				continue
-			}
 
-			b := data[5:n]
+		if !pkt.Valid() {
+			logrus.Debug(connType, " invalid packet read")
+			continue
+		}
+
+		switch pkt.Type() {
+		case packet.PacketTypeData:
+			pkt := packet.DataPacket(pkt)
+
+			node, ok := r.nodes.GetNode(pkt.IP().String())
+			if !ok {
+				logrus.Debug(connType, " unknown node ip: ", pkt.IP())
+				continue
+			}
 
 			aesKey := r.aes.Get(node.Name)
 			if aesKey == nil {
@@ -275,7 +273,8 @@ func (r *Node) ListenConn(conn net.Conn) {
 				continue
 			}
 
-			b, err = aesKey.Decrypt(b)
+			// todo perhaps we can buffer this?
+			b, err := aesKey.Decrypt(pkt.Data())
 			if err != nil {
 				logrus.Warnf("bad encryption on block: %s - %s : %e", node.Name, node.IP, err)
 				continue
@@ -298,72 +297,75 @@ func (r *Node) ListenConn(conn net.Conn) {
 			}
 
 			srcIp := netutil.RemovePort(srcAddr)
-			if _, ok := r.nodes.GetNode(srcIp); !ok {
+			if srcIp != node.IP {
 				logrus.Warn("bad packet from ext unknown ip src: ", srcIp)
 				continue
 			}
 
-			_, _ = r.iface.Write(b)
-			logrus.Debugf("wrote packet (%d bytes) from %s - %s", len(b), node.IP, node.Name)
+			_, _ = r.network.GetRaw().Write(b)
+
+			logrus.Debugf("%s data from %s - %s", connType, node.Name, node.IP)
 		case packet.PacketTypeExchange:
-			// this is a aes key exchange.
-			if n < 21 {
-				continue
-			}
-			ip := net.IPv4(data[1], data[2], data[3], data[4]).To4().String()
+			pkt := packet.ExchangePacket(pkt)
 
-			node, ok := r.nodes.GetNode(ip)
+			node, ok := r.nodes.GetNode(pkt.IP().String())
 			if !ok {
-				logrus.Warn(connType, "unknown node ip: ", ip)
+				logrus.Debug(connType, " unknown node ip: ", pkt.IP())
 				continue
 			}
 
-			aesKeyEncrypted := data[21:n]
-			aesKey, err := r.private.Decrypt(aesKeyEncrypted, nil, nil)
+			aesKey, err := r.private.Decrypt(pkt.Data(), nil, nil)
 			if err != nil {
-				logrus.Warnf("%s bad encryption on aes key: %d : %e", connType, len(aesKeyEncrypted), err)
+				logrus.Errorf("%s bad encryption on aes key: %s", connType, err.Error())
 				continue
 			}
 
 			if len(aesKey) != 32 {
-				logrus.Warn(connType, "bad aes key length: ", len(aesKey))
+				logrus.Error(connType, "bad aes key length: ", len(aesKey))
 				continue
 			}
 
 			r.aes.Store(node.Name, aesKey)
 
-			_, _ = write(packet.WrapPkt(buf, packet.PacketTypeExchangeResponse, data[5:21]))
-
-			logrus.Debugf("%s stored aes key from %s - %s", connType, node.IP, node.Name)
+			logrus.Debugf("%s exchange from %s - %s", connType, node.Name, node.IP)
 		case packet.PacketTypePing:
-			if n < 21 {
-				continue
-			}
-			ip := net.IPv4(data[1], data[2], data[3], data[4]).To4().String()
+			pkt := packet.PingPacket(pkt)
 
-			node, ok := r.nodes.GetNode(ip)
+			node, ok := r.nodes.GetNode(pkt.IP().String())
 			if !ok {
-				logrus.Warn(connType, " unknown node ip: ", ip)
+				logrus.Debug(connType, " unknown node ip: ", pkt.IP())
 				continue
 			}
 
 			// check if we have an aes key to this ip
 			aesKey := r.aes.Get(node.Name)
+			id := pkt.ID()
 			if aesKey == nil {
-				write(packet.WrapPkt(buf, packet.PacketTypePong, data[5:21]))
+				pc.MakePongPacket(id)
 
-				logrus.Debugf("%s pong from %s - %s", connType, node.IP, node.Name)
+				if err := write(); err != nil {
+					logrus.Warn("failed to write packet: ", err)
+				}
+
+				logrus.Debugf("%s ping from %s - %s - %s", connType, node.Name, node.IP, id)
 			} else {
-				b := make([]byte, 8)
-				binary.LittleEndian.PutUint64(b, uint64(time.Now().UnixNano()))
-				packet.WrapPkt(buf, packet.PacketTypePongAesPresent, data[5:21])
-				data := utils.OrPanic(aesKey.Encrypt(b))[0].([]byte)
-				copy(buf[17:], data)
-				write(buf[:17+len(data)])
-				logrus.Debugf("%s pong aes from %s - %s", connType, node.IP, node.Name)
+				data := make([]byte, 32)
+				_, _ = rand.Reader.Read(data)
+
+				h := hmac.New(sha3.New512, aesKey.KeyRaw())
+				_, _ = h.Write(data)
+				hMAC := h.Sum(nil)
+
+				pc.MakePongAesPacket(pkt.ID(), data, hMAC)
+
+				if err := write(); err != nil {
+					logrus.Warn("failed to write packet: ", err)
+				}
+
+				logrus.Debugf("%s ping aes from %s - %s - %s", connType, node.Name, node.IP, id)
 			}
 		default:
-			logrus.Warnf("%s unknown packet type: %d - %d - %d \n%s", connType, data[0], n, packet.MTU+21, spew.Sdump(data[:n]))
+			logrus.Warnf("%s unsupported packet type: %d", connType, pkt.Type())
 			continue
 		}
 	}
@@ -375,28 +377,24 @@ func (r *Node) ListenTCP(ln *net.TCPListener) {
 		if err != nil {
 			continue
 		}
-		conn.SetNoDelay(true)
-		conn.SetKeepAlive(false)
-		conn.SetLinger(0)
 		go r.ListenConn(conn)
 	}
 }
 
 func (r *Node) ProcessIface() {
-	buf := make([]byte, packet.MTU+23)
+	pc := packet.NewConstructor()
+	ifaceBuff := make([]byte, packet.MTU)
+
 	for {
-		if r.iface == nil {
-			time.Sleep(time.Millisecond * 50)
-			continue
-		}
-		n, err := r.iface.Read(buf[:packet.MTU])
+		n, err := r.network.GetRaw().Read(ifaceBuff)
 		if err != nil || n == 0 {
 			continue
 		}
-		b := buf[:n]
+		b := ifaceBuff[:n]
 		if !waterutil.IsIPv4(b) {
 			continue
 		}
+
 		srcAddr, dstAddr, isTcp := netutil.GetAddr(b)
 		if srcAddr == "" || dstAddr == "" {
 			continue
@@ -415,13 +413,12 @@ func (r *Node) ProcessIface() {
 			continue
 		}
 
-		data = packet.WrapData(buf[2:], net.ParseIP(*r.ip), data)
-		if isTcp {
-			binary.BigEndian.PutUint16(buf, uint16(len(data)))
-			_ = conn.WriteTCP(buf[:len(data)+2])
-		} else {
-			_ = conn.WriteUDP(data)
-		}
+		pc.MakeDataPacket(data, net.ParseIP(*r.ip))
 
+		if isTcp {
+			_ = conn.WriteTCP(pc.ToTCP())
+		} else {
+			_ = conn.WriteUDP(pc.ToUDP())
+		}
 	}
 }

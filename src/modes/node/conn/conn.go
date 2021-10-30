@@ -4,15 +4,12 @@ import (
 	"bufio"
 	"context"
 	"crypto/ecdsa"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/x509"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/ecies"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/crypto/sha3"
 )
 
 type ConnStore struct {
@@ -51,7 +49,6 @@ type Conn struct {
 
 	connUdp *net.UDPConn
 	connTcp *net.TCPConn
-	// connTcpMtx sync.Mutex
 
 	nodes *node.NodeStore
 	aes   *aes.AesStore
@@ -117,12 +114,12 @@ func (c *ConnStore) New(ip string) *Conn {
 
 func (c *Conn) ManageTCP() {
 	first := true
+	pc := packet.NewConstructor()
 	for {
 		if c.connTcp != nil {
 			_ = c.connTcp.Close()
 			c.connTcp = nil
 		}
-		// c.connTcpMtx.Lock()
 		if !first {
 			select {
 			case <-c.ctx.Done():
@@ -152,59 +149,49 @@ func (c *Conn) ManageTCP() {
 				c.connTcp = nil
 				continue
 			}
-			c.connTcp.SetNoDelay(true)
-			c.connTcp.SetKeepAlive(false)
-			c.connTcp.SetLinger(0)
 			break
 		}
 
 		if c.connTcp == nil {
 			logrus.Warnf("cannot find tcp route to node: %s", c.ip)
-			// c.connTcpMtx.Unlock()
 			continue
 		}
 
 		id := utils.OrPanic(uuid.NewRandom())[0].(uuid.UUID)
-		data := make([]byte, 1+4+16+2)
-		binary.BigEndian.PutUint16(data, uint16(len(packet.WrapIpPkt(data[2:], packet.PacketTypePing, utils.OrPanic(id.MarshalBinary())[0].([]byte), net.ParseIP(*c.ourIP).To4()))))
-		if _, err := c.connTcp.Write(data); err != nil {
-			logrus.Error("failed to write: ", err)
-		}
-		pid := hex.EncodeToString(utils.OrPanic(id.MarshalBinary())[0].([]byte))
+		pc.MakePingPacket(id, net.ParseIP(*c.ourIP))
 
-		pingCh := make(chan string, 1)
+		pkt := pc.ToTCP()
+
+		if _, err := c.connTcp.Write(pkt); err != nil {
+			logrus.Error("failed to write: ", err)
+			continue
+		}
+
+		logrus.Debugf("sending tcp ping to %s - %s - %s", c.name, c.ip, id.String())
+
+		pongCh := make(chan packet.Packet, 1)
 		go func() {
-			buff := make([]byte, packet.MTU+23)
-			defer close(pingCh)
+			defer close(pongCh)
+
+			pc := packet.NewConstructor()
+
 			bconn := bufio.NewReader(c.connTcp)
 			for {
-				_, err := io.ReadFull(bconn, buff[:2])
-				if err == io.EOF {
-					_, err = io.ReadFull(bconn, buff[:2])
-				}
+				err := pc.ReadTCP(bconn)
 				if err != nil {
-					logrus.Error(err)
+					logrus.Error("bad tcp packet read: ", err)
 					return
 				}
-				i := int(binary.BigEndian.Uint16(buff[:2])) + 2
-				_, err = io.ReadFull(bconn, buff[2:i])
-				if err == io.EOF {
-					_, err = io.ReadFull(bconn, buff[:2])
-				}
-				if err != nil {
-					logrus.Error(err)
-					return
-				}
-				if i < 17 {
-					logrus.Warn("bad packet read: ", utils.B2S(buff))
+
+				pkt := pc.ToPacket()
+				if !pkt.Valid() {
+					logrus.Warn("bad packet from tcp read")
 					continue
 				}
-				b := buff[2:i]
-				switch packet.PacketType(b[0]) {
-				case packet.PacketTypePong:
-					pingCh <- fmt.Sprintf("0%s", hex.EncodeToString(b[1:17]))
-				case packet.PacketTypePongAesPresent:
-					pingCh <- fmt.Sprintf("1%s.%s", hex.EncodeToString(b[1:17]), hex.EncodeToString(b[17:]))
+
+				switch pkt.Type() {
+				case packet.PacketTypePong, packet.PacketTypePongAes:
+					pongCh <- pkt.Copy()
 				}
 			}
 		}()
@@ -215,33 +202,25 @@ func (c *Conn) ManageTCP() {
 	outer:
 		for {
 			select {
-			case ping, ok := <-pingCh:
+			case pkt, ok := <-pongCh:
 				if !ok {
 					timedout = true
 					break outer
 				}
-				idx := strings.IndexRune(ping, '.')
-				if idx == -1 {
-					idx = len(ping)
-				}
-				if pid != ping[1:idx] {
-					continue
-				}
-				aesKeyExchanged = ping[0] == '1'
-				if aesKeyExchanged {
-					// verify it
-					data, _ := hex.DecodeString(ping[idx+1:])
-					dec, err := c.Aes().Decrypt(data)
-					if err != nil {
-						logrus.Error(err)
-						aesKeyExchanged = false
-						break
+				switch pkt.Type() {
+				case packet.PacketTypePong:
+					pkt := packet.PongPacket(pkt)
+					if pkt.ID() != id {
+						continue
 					}
+				case packet.PacketTypePongAes:
+					pkt := packet.PongAesPacket(pkt)
+					hash := hmac.New(sha3.New512, c.Aes().KeyRaw())
+					_, _ = hash.Write(pkt.Data())
 
-					t := time.Unix(0, int64(binary.LittleEndian.Uint64(dec)))
-					if !t.After(time.Now().Add(-time.Second * 10)) {
-						aesKeyExchanged = false
-					}
+					hMAC := hash.Sum(nil)
+
+					aesKeyExchanged = hmac.Equal(hMAC, pkt.Hmac())
 				}
 				break outer
 			case <-timeout:
@@ -249,8 +228,8 @@ func (c *Conn) ManageTCP() {
 				break outer
 			}
 		}
+
 		if timedout {
-			// c.connTcpMtx.Unlock()
 			continue
 		}
 
@@ -265,57 +244,58 @@ func (c *Conn) ManageTCP() {
 				logrus.Fatal("failed to encrypt data: ", err)
 			}
 
-			data := make([]byte, len(encrypted)+1+4+16+2)
-			id := utils.OrPanic(uuid.NewRandom())[0].(uuid.UUID)
-			packet.WrapIpPkt(data[2:], packet.PacketTypeExchange, utils.OrPanic(id.MarshalBinary())[0].([]byte), net.ParseIP(*c.ourIP).To4())
-			copy(data[23:], encrypted)
-			binary.BigEndian.PutUint16(data, uint16(len(data)-2))
-			if _, err := c.connTcp.Write(data); err != nil {
+			pc.MakeExchangePacket(encrypted, net.ParseIP(*c.ourIP))
+
+			pkt := pc.ToTCP()
+
+			if _, err := c.connTcp.Write(pkt); err != nil {
 				logrus.Error("failed to write: ", err)
 			}
-			logrus.Debug("sent encrypted data")
 		}
-		// c.connTcpMtx.Unlock()
-		for range pingCh {
+		for range pongCh {
 		}
 	}
 }
 
 func (c *Conn) Ping() {
-	tick := time.NewTicker(time.Millisecond * 100)
+	tick := time.NewTicker(time.Second * 5)
 	defer tick.Stop()
 	defer c.connUdp.Close()
-	pingCh := make(chan string, 1000)
-	defer close(pingCh)
+
+	pongCh := make(chan packet.Packet, 100)
+	defer close(pongCh)
 	go func() {
-		buff := make([]byte, packet.MTU+21)
+		pc := packet.NewConstructor()
 		for {
-			n, _, err := c.connUdp.ReadFromUDP(buff)
+			_, err := pc.ReadUDP(c.connUdp)
 			if err != nil {
 				logrus.Error(err)
 				return
 			}
-			if n < 17 {
-				logrus.Warn("bad packet read: ", utils.B2S(buff))
-				continue
-			}
-			b := buff[:n]
-			switch packet.PacketType(b[0]) {
-			case packet.PacketTypePong:
-				pingCh <- fmt.Sprintf("0%s", hex.EncodeToString(b[1:17]))
-			case packet.PacketTypePongAesPresent:
-				pingCh <- fmt.Sprintf("1%s.%s", hex.EncodeToString(b[1:17]), hex.EncodeToString(b[17:]))
-			default:
-				logrus.Warn("bad response: ", b)
+			pkt := pc.ToUDP().ToPacket()
+			switch pkt.Type() {
+			case packet.PacketTypePong, packet.PacketTypePongAes:
+				pongCh <- pkt.Copy()
 			}
 		}
 	}()
+
+	pc := packet.NewConstructor()
+	first := true
 	for {
-		select {
-		case <-tick.C:
-		case <-c.ctx.Done():
-			return
+		if !first {
+			select {
+			case <-tick.C:
+			case <-c.ctx.Done():
+				return
+			}
+		} else {
+			first = false
+			if c.ctx.Err() != nil {
+				return
+			}
 		}
+
 		node, ok := c.nodes.GetNode(c.ip)
 		if !ok || node.Name != c.name {
 			return
@@ -328,13 +308,21 @@ func (c *Conn) Ping() {
 			if err != nil {
 				continue
 			}
-			id := utils.OrPanic(uuid.NewRandom())[0].(uuid.UUID)
-			pings[hex.EncodeToString(id[:])] = ip
-			data := packet.WrapIpPkt(make([]byte, 1+4+16), packet.PacketTypePing, utils.OrPanic(id.MarshalBinary())[0].([]byte), net.ParseIP(*c.ourIP).To4())
+
 			for i := 0; i < 5; i++ {
-				if _, err = c.connUdp.WriteToUDP(data, addr); err != nil {
+				id := utils.OrPanic(uuid.NewRandom())[0].(uuid.UUID)
+
+				pc.MakePingPacket(id, net.ParseIP(*c.ourIP))
+
+				pkt := pc.ToUDP()
+
+				pings[id.String()] = ip
+
+				if _, err = c.connUdp.WriteToUDP(pkt, addr); err != nil {
 					logrus.Error("failed to write: ", err)
 				}
+
+				logrus.Debugf("sending udp ping to %s - %s - %s", c.name, c.ip, id.String())
 			}
 		}
 
@@ -345,30 +333,26 @@ func (c *Conn) Ping() {
 	outer:
 		for i < len(ips) {
 			select {
-			case ping := <-pingCh:
-				idx := strings.IndexRune(ping, '.')
-				if idx == -1 {
-					idx = len(ping)
-				}
-				if v, ok := pings[ping[1:idx]]; ok {
-					ips[i] = v
-					i++
-				}
-				aesKeyExchanged = ping[0] == '1'
-				if aesKeyExchanged {
-					// verify it
-					data, _ := hex.DecodeString(ping[idx+1:])
-					dec, err := c.Aes().Decrypt(data)
-					if err != nil {
-						logrus.Errorf("%s - %v - %v", err, data, ping)
-						aesKeyExchanged = false
-						continue
+			case pkt := <-pongCh:
+				switch pkt.Type() {
+				case packet.PacketTypePong:
+					pkt := packet.PongPacket(pkt)
+					if v, ok := pings[pkt.ID().String()]; ok {
+						ips[i] = v
+						i++
+						delete(pings, pkt.ID().String())
 					}
+				case packet.PacketTypePongAes:
+					pkt := packet.PongAesPacket(pkt)
+					if v, ok := pings[pkt.ID().String()]; ok {
+						ips[i] = v
+						i++
+						delete(pings, pkt.ID().String())
 
-					t := time.Unix(0, int64(binary.LittleEndian.Uint64(dec)))
-					if !t.After(time.Now().Add(-time.Second * 10)) {
-						aesKeyExchanged = false
-						continue
+						hash := hmac.New(sha3.New512, c.Aes().KeyRaw())
+						_, _ = hash.Write(pkt.Data())
+						hMAC := hash.Sum(nil)
+						aesKeyExchanged = hmac.Equal(hMAC, pkt.Hmac())
 					}
 				}
 			case <-timeout:
@@ -395,14 +379,14 @@ func (c *Conn) Ping() {
 				logrus.Fatal("failed to encrypt data: ", err)
 			}
 
-			data := make([]byte, len(encrypted)+1+4+16)
-			id := utils.OrPanic(uuid.NewRandom())[0].(uuid.UUID)
-			packet.WrapIpPkt(data, packet.PacketTypeExchange, utils.OrPanic(id.MarshalBinary())[0].([]byte), net.ParseIP(*c.ourIP).To4())
-			copy(data[21:], encrypted)
+			pc.MakeExchangePacket(encrypted, net.ParseIP(*c.ourIP))
+			pkt := pc.ToUDP()
+
+			logrus.Debugf("sending udp exchange to %s - %s", c.name, c.ip)
+
 			for i := 0; i < 5; i++ {
-				_ = c.WriteUDP(data)
+				_ = c.WriteUDP(pkt)
 			}
-			logrus.Debug("sent encrypted data")
 		}
 	}
 }
@@ -424,6 +408,7 @@ func (c *Conn) WriteUDP(data []byte) error {
 	if len(data) > packet.MTU+21 {
 		panic(fmt.Sprintf("bad packet length %d", len(data)))
 	}
+	logrus.Debug("writing udp packet")
 
 	_, err = c.connUdp.WriteToUDP(data, addr)
 	return err
@@ -436,11 +421,10 @@ func (c *Conn) WriteTCP(data []byte) error {
 		return c.WriteUDP(data[2:])
 	}
 
-	// c.connTcpMtx.Lock()
-	_, err := c.connTcp.Write(data)
 	if len(data) > packet.MTU+23 {
 		panic(fmt.Sprintf("bad packet length %d", len(data)))
 	}
-	// c.connTcpMtx.Unlock()
+	logrus.Debug("writing tcp packet")
+	_, err := c.connTcp.Write(data)
 	return err
 }

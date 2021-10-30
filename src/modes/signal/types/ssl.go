@@ -28,7 +28,7 @@ var (
 	ErrBadJoinToken = fmt.Errorf("bad join token")
 )
 
-func GenerateClient(config *configure.Config, name string) (*configure.Config, error) {
+func GenerateNode(config *configure.Config, name string) (*configure.Config, error) {
 	cert, priv, err := GenerateClientTls(config)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func GenerateClient(config *configure.Config, name string) (*configure.Config, e
 			Name:         config.Name,
 			AccessPoints: config.AdvertiseAddresses,
 		}),
-		ConfigFile:            fmt.Sprintf("%s.%s.yaml", name, configure.ModeNode),
+		Config:                fmt.Sprintf("%s.%s.yaml", name, configure.ModeNode),
 		ClientPublicKey:       utils.B2S(cert),
 		ClientPrivateKey:      utils.B2S(priv),
 		SignalServerPublicKey: config.SignalServerPublicKey,
@@ -55,6 +55,26 @@ func GenerateClient(config *configure.Config, name string) (*configure.Config, e
 		Name:                  name,
 		DnsAliases:            []string{name},
 		Bind:                  "0.0.0.0:7777",
+		AdvertiseAddresses:    []string{"127.0.0.1:7777"},
+	}), nil
+}
+
+func GenerateSignal(config *configure.Config, name string) (*configure.Config, error) {
+	return configure.NewFromFile(configure.Config{
+		LogLevel: "info",
+		Mode:     configure.ModeSignal,
+		SignalServers: append(config.SignalServers, configure.SignalServer{
+			Name:         config.Name,
+			AccessPoints: config.AdvertiseAddresses,
+		}),
+		Config:                 fmt.Sprintf("%s.%s.yaml", name, configure.ModeSignal),
+		SignalServerPublicKey:  config.SignalServerPublicKey,
+		SignalServerPrivateKey: config.SignalServerPrivateKey,
+		TokenKey:               config.TokenKey,
+		Name:                   name,
+		DnsAliases:             []string{name},
+		Bind:                   "0.0.0.0:7777",
+		AdvertiseAddresses:     []string{"127.0.0.1:7777"},
 	}), nil
 }
 

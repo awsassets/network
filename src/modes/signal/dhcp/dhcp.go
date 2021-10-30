@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/patrickmn/go-cache"
+	"github.com/disembark/network/src/cache"
 )
 
 type DHCP struct {
@@ -17,14 +17,14 @@ type DHCP struct {
 func New() *DHCP {
 	return &DHCP{
 		rand:  rand.New(rand.NewSource(time.Now().UnixNano())),
-		cache: cache.New(time.Hour*24, time.Hour),
+		cache: cache.New(time.Hour, time.Hour*24),
 	}
 }
 
 func (d *DHCP) NewIp(node string) net.IP {
 	if ip, ok := d.GetNode(node); ok {
-		d.cache.SetDefault(node, ip.String())
-		d.cache.SetDefault(ip.String(), node)
+		d.cache.Store(node, ip.String())
+		d.cache.Store(ip.String(), node)
 		return ip
 	}
 	var ip string
@@ -35,8 +35,8 @@ func (d *DHCP) NewIp(node string) net.IP {
 		}
 	}
 
-	d.cache.SetDefault(node, ip)
-	d.cache.SetDefault(ip, node)
+	d.cache.Store(node, ip)
+	d.cache.Store(ip, node)
 
 	return net.ParseIP(ip)
 }
@@ -46,8 +46,8 @@ func (d *DHCP) StoreIp(ip net.IP, node string) {
 	if oIP, ok := d.cache.Get(node); ok {
 		d.cache.Delete(oIP.(string))
 	}
-	d.cache.SetDefault(node, ip.String())
-	d.cache.SetDefault(ip.String(), node)
+	d.cache.Store(node, ip.String())
+	d.cache.Store(ip.String(), node)
 }
 
 func (d *DHCP) GetNode(node string) (net.IP, bool) {
@@ -58,18 +58,15 @@ func (d *DHCP) GetNode(node string) (net.IP, bool) {
 	return nil, false
 }
 
-func (d *DHCP) Serialize() map[string]cache.Item {
-	return d.cache.Items()
+func (d *DHCP) Serialize() []cache.CacheItem {
+	return d.cache.ItemsArray()
 }
 
-func (d *DHCP) Merge(items map[string]cache.Item) {
-	for k, v := range items {
+func (d *DHCP) Merge(items []cache.CacheItem) {
+	for _, v := range items {
 		if v.Expired() {
 			continue
 		}
-		if _, t, ok := d.cache.GetWithExpiration(k); ok && t.After(time.Unix(0, v.Expiration)) {
-			continue
-		}
-		d.cache.Set(k, v.Object, time.Until(time.Unix(0, v.Expiration)))
+		d.cache.Merge(v)
 	}
 }

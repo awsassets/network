@@ -1,7 +1,7 @@
-package relay
+package server
 
 import "github.com/disembark/network/src/configure"
 
-func NewServer(config *configure.Config) {
+func New(config *configure.Config) {
 
 }

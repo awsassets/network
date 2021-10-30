@@ -1,9 +1,9 @@
 package types
 
 import (
+	"github.com/disembark/network/src/cache"
 	"github.com/disembark/network/src/configure"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/patrickmn/go-cache"
 )
 
 type MessageType int32
@@ -34,7 +34,7 @@ type Message struct {
 
 // Message payload when Type = MessageTypeNodeState
 type MessageNodeState struct {
-	Nodes   map[string]cache.Item    `json:"nodes"`
+	Nodes   []cache.CacheItem        `json:"nodes"`
 	Current JoinPayloadNode          `json:"current"`
 	Signals []configure.SignalServer `json:"signals"`
 }
@@ -42,9 +42,9 @@ type MessageNodeState struct {
 // Message payload when Type = MessageTypeSignalState
 type MessageSignalState struct {
 	configure.SignalServer
-	Nodes   map[string]cache.Item    `json:"nodes"`
+	Nodes   []cache.CacheItem        `json:"nodes"`
 	Signals []configure.SignalServer `json:"signals"`
-	DHCP    map[string]cache.Item    `json:"dhcp,omitempty"`
+	DHCP    []cache.CacheItem        `json:"dhcp,omitempty"`
 }
 
 type MessageNodeRegister struct {

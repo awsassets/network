@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/patrickmn/go-cache"
+	"github.com/disembark/network/src/cache"
 )
 
 type Events struct {
@@ -14,7 +14,7 @@ type Events struct {
 
 func New() *Events {
 	return &Events{
-		cache: cache.New(time.Hour*12, time.Hour),
+		cache: cache.New(time.Hour, time.Hour*12),
 		mtx:   &sync.Mutex{},
 	}
 }
@@ -26,6 +26,6 @@ func (e *Events) Register(name string) bool {
 		return true
 	}
 
-	e.cache.SetDefault(name, true)
+	e.cache.Store(name, true)
 	return false
 }

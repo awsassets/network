@@ -1,9 +1,5 @@
 package packet
 
-import (
-	"net"
-)
-
 type PacketType byte
 
 const (
@@ -11,116 +7,71 @@ const (
 	PacketTypeData
 	PacketTypePing
 	PacketTypePong
-	PacketTypePongAesPresent
+	PacketTypePongAes
 	PacketTypeExchange
-	PacketTypeExchangeResponse
 )
 
 const MTU = 65000
 
-/*
-# Data Packet
+type (
+	Packet         []byte
+	DataPacket     Packet
+	PingPacket     Packet
+	PongPacket     Packet
+	PongAesPacket  Packet
+	ExchangePacket Packet
+)
 
-0              0              1              2              3
-1             1              ip start 4 bytes ...
+const (
+	PingPacketLength           = 1 + 4 + 16
+	PongPacketLength           = 1 + 16
+	PongAesPacketLength        = 1 + 16 + 32 + 64
+	ExchangePacketHeaderLength = 1 + 4
+	DataPacketHeaderLength     = 1 + 4
 
-2           ip end...        payload n bytes....
+	TCPHeader = 2
+)
 
+func (p Packet) Type() PacketType {
+	if len(p) == 0 {
+		return 0
+	}
 
-# Ping Packet
-
-0              0              1              2              3
-1             1              ip start 4 bytes ...
-
-2           ip end...        uuid start 16 bytes ...
-
-3
-
-4
-
-5
-
-6         uuid end...
-
-
-# Pong Packet
-
-0              0              1              2              3
-1              2              uuid start 16 bytes ...
-
-2
-
-3
-
-4
-
-5         uuid end...
-
-
-# PongAES Packet
-
-0              0              1              2              3
-1              3              uuid start 16 bytes ...
-
-2
-
-3
-
-4
-
-5         uuid end...        time start aes encrypted 16 bytes...
-
-6
-
-7                       time end...
-
-
-# Exchange Packet
-
-0              0              1              2              3
-1             4              ip start 4 bytes ...
-
-2          ip end...        uuid start 16 bytes ...
-
-3
-
-4
-
-5
-
-6         uuid end...       aes key encrypted n bytes...
-
-# ExchangeResponse Packet
-
-0              0              1              2              3
-1             4              uuid start 16 bytes ...
-
-2
-
-3
-
-4
-
-5         uuid end...
-
-*/
-
-func WrapIpPkt(arr []byte, t PacketType, id []byte, ip net.IP) []byte {
-	arr[0] = byte(t)
-	copy(arr[1:5], ip.To4())
-	copy(arr[5:], id)
-	return arr[:5+len(id)]
+	return PacketType(p[0])
 }
 
-func WrapPkt(arr []byte, t PacketType, id []byte) []byte {
-	arr[0] = byte(t)
-	copy(arr[1:], id)
-	return arr[:1+len(id)]
+func (p Packet) Valid() bool {
+	switch p.Type() {
+	case PacketTypeData:
+		return DataPacket(p).Valid()
+	case PacketTypePing:
+		return PingPacket(p).Valid()
+	case PacketTypePong:
+		return PongPacket(p).Valid()
+	case PacketTypePongAes:
+		return PongAesPacket(p).Valid()
+	case PacketTypeExchange:
+		return ExchangePacket(p).Valid()
+	}
+
+	return false
 }
 
-func WrapData(arr []byte, ip net.IP, data []byte) []byte {
-	arr[0] = byte(PacketTypeData)
-	copy(arr[1:5], ip.To4())
-	copy(arr[5:], data)
-	return arr[:5+len(data)]
+func (p Packet) SetType(t PacketType) {
+	if len(p) == 0 {
+		return
+	}
+
+	p[0] = byte(t)
+}
+
+func (p Packet) Copy() Packet {
+	n := make(Packet, len(p))
+	copy(n, p)
+	return n
+}
+
+func (p Packet) CopyTo(n []byte) Packet {
+	copy(n, p)
+	return n
 }

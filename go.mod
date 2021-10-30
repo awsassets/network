@@ -7,12 +7,12 @@ require (
 	github.com/ethereum/go-ethereum v1.10.2
 	github.com/fasthttp/websocket v1.4.3
 	github.com/json-iterator/go v1.1.11
-	github.com/libp2p/go-reuseport v0.1.0
-	github.com/patrickmn/go-cache v2.1.0+incompatible
+	github.com/miekg/dns v1.1.43
 	github.com/sirupsen/logrus v1.8.1
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/spf13/pflag v1.0.5
 	github.com/valyala/fasthttp v1.31.0
+	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5
 )
 
 require (
@@ -32,7 +32,7 @@ require (
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5 // indirect
+	golang.org/x/net v0.0.0-20210510120150-4163338589ed // indirect
 	golang.org/x/text v0.3.6 // indirect
 	gopkg.in/ini.v1 v1.63.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect

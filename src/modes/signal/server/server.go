@@ -43,11 +43,17 @@ func New(config *configure.Config) {
 	if config.Create != "" {
 		switch config.Create {
 		case configure.ModeNode:
-			clConf, err := types.GenerateClient(config, config.CreateName)
+			clConf, err := types.GenerateNode(config, config.CreateName)
 			if err != nil {
 				logrus.Fatalf("failed to listen: %v", err)
 			}
-			logrus.Infof("wrote %s with a new node config", clConf.ConfigFile)
+			logrus.Infof("wrote %s with a new node config", clConf.Config)
+		case configure.ModeSignal:
+			clConf, err := types.GenerateSignal(config, config.CreateName)
+			if err != nil {
+				logrus.Fatalf("failed to listen: %v", err)
+			}
+			logrus.Infof("wrote %s with a new node config", clConf.Config)
 		default:
 			logrus.Fatal("unknown create mode: ", config.Create)
 		}
