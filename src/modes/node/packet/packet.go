@@ -11,7 +11,10 @@ const (
 	PacketTypeExchange
 )
 
-const MTU = 65000
+const (
+	MTU           = 65000
+	MaxPacketSize = MTU + 64
+)
 
 type (
 	Packet         []byte

@@ -440,7 +440,7 @@ func (c *Conn) WriteUDP(data []byte) error {
 		return err
 	}
 
-	if len(data) > packet.MTU+21 {
+	if len(data) > packet.MaxPacketSize {
 		panic(fmt.Sprintf("bad packet length %d", len(data)))
 	}
 
@@ -466,7 +466,7 @@ func (c *Conn) WriteTCP(data []byte) error {
 		return c.WriteUDP(data[2:])
 	}
 
-	if len(data) > packet.MTU+23 {
+	if len(data) > packet.MaxPacketSize {
 		panic(fmt.Sprintf("bad packet length %d", len(data)))
 	}
 

@@ -12,10 +12,10 @@ type PacketConstructor struct {
 	size int
 }
 
-const MaxPacketSize = MTU + 64
-
-type UdpPacket []byte
-type TcpPacket []byte
+type (
+	UdpPacket []byte
+	TcpPacket []byte
+)
 
 func (t TcpPacket) Size() uint16 {
 	return binary.BigEndian.Uint16(t[:2])
