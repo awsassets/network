@@ -26,12 +26,19 @@ func New() *DNS {
 }
 
 func fixHostname(hostname string) string {
-	if strings.HasSuffix(hostname, ".") {
-		return hostname + "disembark.internal."
+	idx := strings.IndexRune(hostname, '.')
+
+	if idx == len(hostname) || idx == -1 {
+		hostname = hostname + ".internal.disembark."
 	}
 
-	return hostname + ".disembark.internal."
+	if !strings.HasSuffix(hostname, ".") {
+		return hostname + "."
+	}
+
+	return hostname
 }
+
 func prtHostname(ip string) string {
 	ipb := net.ParseIP(ip).To4()
 

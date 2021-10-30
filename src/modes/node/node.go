@@ -242,6 +242,9 @@ func (r *Node) ListenConn(conn net.Conn) {
 			return err
 		}
 	}
+
+	hmacBuffer := make([]byte, 32)
+
 	for {
 		pkt, err := read()
 		if err != nil {
@@ -272,6 +275,8 @@ func (r *Node) ListenConn(conn net.Conn) {
 				logrus.Warnf("dropping packet due to no key exchange: %s - %s", node.Name, node.IP)
 				continue
 			}
+
+			aesKey.Revive()
 
 			// todo perhaps we can buffer this?
 			b, err := aesKey.Decrypt(pkt.Data())
@@ -349,14 +354,13 @@ func (r *Node) ListenConn(conn net.Conn) {
 
 				logrus.Debugf("%s ping from %s - %s - %s", connType, node.Name, node.IP, id)
 			} else {
-				data := make([]byte, 32)
-				_, _ = rand.Reader.Read(data)
+				_, _ = rand.Reader.Read(hmacBuffer)
 
 				h := hmac.New(sha3.New512, aesKey.KeyRaw())
-				_, _ = h.Write(data)
+				_, _ = h.Write(hmacBuffer)
 				hMAC := h.Sum(nil)
 
-				pc.MakePongAesPacket(pkt.ID(), data, hMAC)
+				pc.MakePongAesPacket(pkt.ID(), hmacBuffer, hMAC)
 
 				if err := write(); err != nil {
 					logrus.Warn("failed to write packet: ", err)
@@ -383,19 +387,36 @@ func (r *Node) ListenTCP(ln *net.TCPListener) {
 
 func (r *Node) ProcessIface() {
 	pc := packet.NewConstructor()
-	ifaceBuff := make([]byte, packet.MTU)
+	// since we are doing aes encryption on this data, we need to make the packet data slightly bigger to allow for the aes padding to be at the beginning.
+	// to avoid copying data from one buffer to another we must use the pc buffer here otherwise we end up with copying data.
+	// ifaceBuff := make([]byte, packet.MTU+aes.BlockSize)
+	ifaceBuff := pc.Buffer() // this is a raw packet buffer and will result in a bad packet if we read from it, so we must not do that.
+
+	// we want to make sure the network packet data lands where it is going to be in the final data packet.
+	// to do this we must look at where the data should be.
+	// There is a header for the datapacket which needs to be offset here.
+
+	// we need to check if this changes ever so that we can update the underlying buffer with the new ip to avoid copying data
+	currentIp := *r.ip
+
+	for i, v := range net.ParseIP(*r.ip).To4() {
+		ifaceBuff[1+i] = v
+	}
 
 	for {
-		n, err := r.network.GetRaw().Read(ifaceBuff)
+		n, err := r.network.GetRaw().Read(ifaceBuff[packet.DataPacketHeaderLength+aes.BlockSize:])
 		if err != nil || n == 0 {
 			continue
 		}
-		b := ifaceBuff[:n]
-		if !waterutil.IsIPv4(b) {
+		b := ifaceBuff[packet.DataPacketHeaderLength : packet.DataPacketHeaderLength+n+aes.BlockSize]
+
+		pkt := b[aes.BlockSize:]
+
+		if !waterutil.IsIPv4(pkt) {
 			continue
 		}
 
-		srcAddr, dstAddr, isTcp := netutil.GetAddr(b)
+		srcAddr, dstAddr, isTcp := netutil.GetAddr(pkt)
 		if srcAddr == "" || dstAddr == "" {
 			continue
 		}
@@ -406,14 +427,26 @@ func (r *Node) ProcessIface() {
 		}
 
 		conn := r.conn.New(node.IP)
+		if conn == nil {
+			logrus.Warn("conn manager has a bad node tree")
+			continue
+		}
 
-		data, err := conn.Aes().Encrypt(b)
+		_, err = conn.Aes().Encrypt(b)
 		if err != nil {
 			logrus.Warn("failed to encrypt pkt: ", err)
 			continue
 		}
 
-		pc.MakeDataPacket(data, net.ParseIP(*r.ip))
+		pc.MakeDataPacketSize(n + aes.BlockSize)
+
+		if *r.ip != currentIp {
+			currentIp = *r.ip
+
+			for i, v := range net.ParseIP(*r.ip).To4() {
+				ifaceBuff[1+i] = v
+			}
+		}
 
 		if isTcp {
 			_ = conn.WriteTCP(pc.ToTCP())

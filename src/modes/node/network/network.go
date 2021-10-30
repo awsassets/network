@@ -68,7 +68,7 @@ func (n *NetworkInterface) configTun() {
 		execCmd("/sbin/ip", "link", "set", "dev", n.raw.Name(), "mtu", fmt.Sprint(packet.MTU))
 		execCmd("/sbin/ip", "addr", "add", "10.10.0.0", "dev", n.raw.Name(), "scope", "host")
 		execCmd("/sbin/ip", "link", "set", "dev", n.raw.Name(), "up")
-		execCmd("/usr/bin/systemd-resolve", "--set-dns", "10.10.0.0", "--set-domain", "disembark.internal", "--interface", n.raw.Name())
+		execCmd("/usr/bin/systemd-resolve", "--set-dns", "10.10.0.0", "--set-domain", "internal.disembark", "--interface", n.raw.Name())
 	default:
 		logrus.Fatal("not support os: ", runtime.GOOS)
 	}

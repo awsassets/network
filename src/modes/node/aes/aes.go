@@ -8,18 +8,41 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/disembark/network/src/utils"
 )
+
+const BlockSize = aes.BlockSize
 
 type AesStore struct {
 	mp *sync.Map
 }
 
 func New() *AesStore {
-	return &AesStore{
+	a := &AesStore{
 		mp: &sync.Map{},
 	}
+
+	go a.runner()
+
+	return a
+}
+
+func (a *AesStore) runner() {
+	tick := time.NewTicker(time.Minute * 5)
+	for range tick.C {
+		a.clean()
+	}
+}
+
+func (a *AesStore) clean() {
+	a.mp.Range(func(key, value interface{}) bool {
+		if value.(*AesKey).lastUsed.Before(time.Now().Add(-time.Minute * 30)) {
+			a.mp.Delete(key)
+		}
+		return true
+	})
 }
 
 func (a *AesStore) New(name string) *AesKey {
@@ -57,7 +80,8 @@ func (a *AesStore) Store(name string, key []byte) {
 }
 
 type AesKey struct {
-	key []byte
+	key      []byte
+	lastUsed time.Time
 }
 
 func (a *AesKey) Key() string {
@@ -68,19 +92,22 @@ func (a *AesKey) KeyRaw() []byte {
 	return a.key
 }
 
+func (a *AesKey) Revive() {
+	a.lastUsed = time.Now()
+}
+
 func (a *AesKey) Encrypt(data []byte) ([]byte, error) {
 	block, err := aes.NewCipher(a.key)
 	if err != nil {
 		return nil, err
 	}
-	ciphertext := make([]byte, aes.BlockSize+len(data))
-	iv := ciphertext[:aes.BlockSize]
+	iv := data[:aes.BlockSize]
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
 		return nil, err
 	}
 	cfb := cipher.NewCFBEncrypter(block, iv)
-	cfb.XORKeyStream(ciphertext[aes.BlockSize:], data)
-	return ciphertext, nil
+	cfb.XORKeyStream(data[aes.BlockSize:], data[aes.BlockSize:])
+	return data, nil
 }
 
 func (a *AesKey) Decrypt(data []byte) ([]byte, error) {

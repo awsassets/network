@@ -20,6 +20,20 @@ func (c *PacketConstructor) MakeDataPacket(data []byte, ip net.IP) DataPacket {
 	return datapkt
 }
 
+func (c *PacketConstructor) MakeDataPacketSize(size int) DataPacket {
+	pkt := Packet(c.slice(DataPacketHeaderLength + size))
+
+	pkt.SetType(PacketTypeData)
+
+	datapkt := DataPacket(pkt)
+
+	if !c.ToPacket().Valid() {
+		panic("bad data packet creation")
+	}
+
+	return datapkt
+}
+
 func (p DataPacket) Valid() bool {
 	return len(p) > DataPacketHeaderLength && Packet(p).Type() == PacketTypeData
 }

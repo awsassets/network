@@ -31,13 +31,17 @@ type ConnStore struct {
 }
 
 func New(nodes *node.NodeStore, ourIP *string) *ConnStore {
-	return &ConnStore{
+	s := &ConnStore{
 		mp: &sync.Map{},
 
 		nodes: nodes,
 		aes:   aes.New(),
 		ourIP: ourIP,
 	}
+
+	go s.runner()
+
+	return s
 }
 
 type Conn struct {
@@ -53,11 +57,19 @@ type Conn struct {
 	nodes *node.NodeStore
 	aes   *aes.AesStore
 	ourIP *string
+
+	deleted  bool
+	lastUsed time.Time
 }
 
 func (c *ConnStore) Stop(ip string) {
 	if v, ok := c.mp.LoadAndDelete(ip); ok {
-		v.(*Conn).cancel()
+		conn := v.(*Conn)
+		conn.deleted = true
+
+		logrus.Debugf("cleaning up connection: %s - %s", conn.name, conn.ip)
+
+		conn.cancel()
 	}
 }
 
@@ -82,6 +94,7 @@ func (c *ConnStore) New(ip string) *Conn {
 		nodes:        c.nodes,
 		aes:          c.aes,
 		ourIP:        c.ourIP,
+		lastUsed:     time.Now(),
 	}
 	if v, ok := c.mp.LoadOrStore(node.IP, conn); ok {
 		return v.(*Conn)
@@ -110,6 +123,25 @@ func (c *ConnStore) New(ip string) *Conn {
 	}()
 
 	return conn
+}
+
+func (c *ConnStore) runner() {
+	tick := time.NewTicker(time.Minute * 5)
+	for range tick.C {
+		c.cleanup()
+	}
+}
+
+func (c *ConnStore) cleanup() {
+	c.mp.Range(func(key, value interface{}) bool {
+		conn := value.(*Conn)
+
+		if conn.lastUsed.Before(time.Now().Add(-time.Minute * 10)) {
+			c.Stop(conn.ip)
+		}
+
+		return true
+	})
 }
 
 func (c *Conn) ManageTCP() {
@@ -269,7 +301,9 @@ func (c *Conn) Ping() {
 		for {
 			_, err := pc.ReadUDP(c.connUdp)
 			if err != nil {
-				logrus.Error(err)
+				if c.ctx.Err() == nil {
+					logrus.Error(err)
+				}
 				return
 			}
 			pkt := pc.ToUDP().ToPacket()
@@ -408,9 +442,13 @@ func (c *Conn) WriteUDP(data []byte) error {
 	if len(data) > packet.MTU+21 {
 		panic(fmt.Sprintf("bad packet length %d", len(data)))
 	}
-	logrus.Debug("writing udp packet")
 
+	logrus.Debugf("writing udp packet to %s - %s", c.name, c.ip)
 	_, err = c.connUdp.WriteToUDP(data, addr)
+
+	c.lastUsed = time.Now()
+	c.Aes().Revive()
+
 	return err
 }
 
@@ -424,7 +462,12 @@ func (c *Conn) WriteTCP(data []byte) error {
 	if len(data) > packet.MTU+23 {
 		panic(fmt.Sprintf("bad packet length %d", len(data)))
 	}
-	logrus.Debug("writing tcp packet")
+
+	logrus.Debugf("writing tcp packet to %s - %s", c.name, c.ip)
 	_, err := c.connTcp.Write(data)
+
+	c.lastUsed = time.Now()
+	c.Aes().Revive()
+
 	return err
 }
