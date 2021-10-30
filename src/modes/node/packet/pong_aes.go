@@ -1,6 +1,8 @@
 package packet
 
 import (
+	"fmt"
+
 	"github.com/google/uuid"
 )
 
@@ -16,7 +18,7 @@ func (c *PacketConstructor) MakePongAesPacket(id uuid.UUID, data []byte, hmac []
 	pong.SetHmac(hmac)
 
 	if !c.ToPacket().Valid() {
-		panic("bad pong aes packet creation")
+		panic(fmt.Errorf("bad pong aes packet creation"))
 	}
 
 	return pong
@@ -50,7 +52,7 @@ func (p PongAesPacket) Data() []byte {
 
 func (p PongAesPacket) SetData(data []byte) {
 	if len(data) != 32 {
-		panic("bad data length required 32 bytes")
+		panic(fmt.Errorf("bad data length required 32 bytes"))
 	}
 
 	copy(p[1+16:1+16+32], data)
@@ -66,7 +68,7 @@ func (p PongAesPacket) Hmac() []byte {
 
 func (p PongAesPacket) SetHmac(hmac []byte) {
 	if len(hmac) != 64 {
-		panic("bad data length required 32 bytes")
+		panic(fmt.Errorf("bad data length required 32 bytes"))
 	}
 
 	copy(p[1+16+32:1+16+32+64], hmac)

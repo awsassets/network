@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"fmt"
 	"net"
 )
 
@@ -14,7 +15,7 @@ func (c *PacketConstructor) MakeExchangePacket(data []byte, ip net.IP) ExchangeP
 	exchange.SetData(data)
 
 	if !c.ToPacket().Valid() {
-		panic("bad exchange packet creation")
+		panic(fmt.Errorf("bad exchange packet creation"))
 	}
 
 	return exchange

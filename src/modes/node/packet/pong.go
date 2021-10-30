@@ -1,6 +1,8 @@
 package packet
 
 import (
+	"fmt"
+
 	"github.com/google/uuid"
 )
 
@@ -14,7 +16,7 @@ func (c *PacketConstructor) MakePongPacket(id uuid.UUID) PongPacket {
 	pong.SetID(id)
 
 	if !c.ToPacket().Valid() {
-		panic("bad pong packet creation")
+		panic(fmt.Errorf("bad pong packet creation"))
 	}
 
 	return pong

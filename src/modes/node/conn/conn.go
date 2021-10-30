@@ -441,7 +441,7 @@ func (c *Conn) WriteUDP(data []byte) error {
 	}
 
 	if len(data) > packet.MaxPacketSize {
-		panic(fmt.Sprintf("bad packet length %d", len(data)))
+		panic(fmt.Errorf("bad packet length %d", len(data)))
 	}
 
 	logrus.Debugf("writing udp packet to %s - %s", c.name, c.ip)
@@ -467,7 +467,7 @@ func (c *Conn) WriteTCP(data []byte) error {
 	}
 
 	if len(data) > packet.MaxPacketSize {
-		panic(fmt.Sprintf("bad packet length %d", len(data)))
+		panic(fmt.Errorf("bad packet length %d", len(data)))
 	}
 
 	logrus.Debugf("writing tcp packet to %s - %s", c.name, c.ip)

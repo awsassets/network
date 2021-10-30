@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"fmt"
 	"net"
 )
 
@@ -14,7 +15,7 @@ func (c *PacketConstructor) MakeDataPacket(data []byte, ip net.IP) DataPacket {
 	datapkt.SetData(data)
 
 	if !c.ToPacket().Valid() {
-		panic("bad data packet creation")
+		panic(fmt.Errorf("bad data packet creation"))
 	}
 
 	return datapkt
@@ -28,7 +29,7 @@ func (c *PacketConstructor) MakeDataPacketSize(size int) DataPacket {
 	datapkt := DataPacket(pkt)
 
 	if !c.ToPacket().Valid() {
-		panic("bad data packet creation")
+		panic(fmt.Errorf("bad data packet creation"))
 	}
 
 	return datapkt

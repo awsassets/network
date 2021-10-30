@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/google/uuid"
@@ -16,7 +17,7 @@ func (c *PacketConstructor) MakePingPacket(id uuid.UUID, ip net.IP) PingPacket {
 	ping.SetIP(ip)
 
 	if !c.ToPacket().Valid() {
-		panic("bad ping packet creation")
+		panic(fmt.Errorf("bad ping packet creation"))
 	}
 
 	return ping
