@@ -12,18 +12,28 @@ go build .
 ./network 
 ```
 
+List of arguments
 ```
-./network --create node --create_name node
+./network --help
 ```
 
 #### Windows (running relay or node requires admin)
+
+This project makes use of wintun, the tunnel device for windows by WireGaurd.
+You will have to download the dll file.
+<a href="https://www.wintun.net/">https://www.wintun.net/</a>
+Download the zip archive and extract the dll from the bin folder that corresponds to your CPU architecture.
+Ie. AMD64  = 64 bit
+    i386   = 32 bit
+
 ```
 go build .
 ./network.exe
 ```
 
+List of arguments
 ```
-./network --create node --create_name node
+./network.exe --help
 ```
 
 If you want the DNS to resolve inside WSL you need to do a bit of configuring.
