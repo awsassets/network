@@ -68,6 +68,14 @@ func (c *Cache) Store(key string, value interface{}) {
 	})
 }
 
+func (c *Cache) Expire(key string, t time.Time) {
+	if v, ok := c.dirty.Load(key); ok {
+		item := v.(CacheItem)
+		item.Expiry = t
+		c.dirty.Store(key, item)
+	}
+}
+
 func (c *Cache) StoreExpiry(key string, value interface{}, expiry time.Time) {
 	if expiry.Before(time.Now()) {
 		return
@@ -90,6 +98,38 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 	if item.Expired() {
 		c.dirty.Delete(key)
 		return nil, false
+	}
+
+	return item.Object, true
+}
+
+func (c *Cache) StoreOrGet(key string, value interface{}) (interface{}, bool) {
+	expiry := time.Time{}
+	if c.expire != 0 {
+		expiry = time.Now().Add(c.expire)
+	}
+
+	return c.StoreOrGetExpire(key, value, expiry)
+}
+
+func (c *Cache) StoreOrGetExpire(key string, value interface{}, expiry time.Time) (interface{}, bool) {
+	i, ok := c.dirty.LoadOrStore(key, CacheItem{
+		Key:    key,
+		Object: value,
+		Expiry: expiry,
+	})
+	if !ok {
+		return value, false
+	}
+
+	item := i.(CacheItem)
+	if item.Expired() {
+		c.dirty.Store(key, CacheItem{
+			Key:    key,
+			Object: value,
+			Expiry: expiry,
+		})
+		return value, false
 	}
 
 	return item.Object, true
@@ -136,6 +176,14 @@ func (c *Cache) worker() {
 
 func (c *Cache) Delete(key string) {
 	c.dirty.Delete(key)
+}
+
+func (c *Cache) GetDelete(key string) (interface{}, bool) {
+	if v, ok := c.dirty.LoadAndDelete(key); ok {
+		return v.(CacheItem).Object, true
+	}
+
+	return nil, false
 }
 
 func (c *Cache) ItemsArray() []CacheItem {
