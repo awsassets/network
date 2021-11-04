@@ -37,12 +37,10 @@ func (d *windowsDevice) Name() string {
 }
 
 func (d *windowsDevice) Read(buff []byte) (int, error) {
-	logrus.Debug("reading into buffer")
 	return d.NativeTun.Read(buff, 0)
 }
 
 func (d *windowsDevice) Write(buff []byte) (int, error) {
-	logrus.Debug("writing into device")
 	return d.NativeTun.Write(buff, 0)
 }
 

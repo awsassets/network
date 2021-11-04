@@ -26,6 +26,8 @@ Download the zip archive and extract the dll from the bin folder that correspond
 Ie. AMD64  = 64 bit
     i386   = 32 bit
 
+You can either place the DLL next to the binary or you can install it to your `C:/Windows/System32` folder for global use.
+
 ```
 go build .
 ./network.exe

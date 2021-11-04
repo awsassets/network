@@ -48,6 +48,12 @@ type Server struct {
 	startTime int64
 }
 
+type pingEvent struct {
+	conn  net.Conn
+	addr  *net.UDPAddr
+	isUDP bool
+}
+
 func NewServer(config *configure.Config) {
 	logrus.Info("starting relay")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -310,8 +316,6 @@ outer:
 			isTcp = true
 		}
 
-		logrus.Debug("read new packet")
-
 		pkt := relayPc.ToPacket()
 
 		if !pkt.Valid() {
@@ -322,7 +326,6 @@ outer:
 		// the packet is a valid packet, we now need to see what the type of packet it is so we know how to handle it.
 		switch pkt.Type() {
 		case packet.PacketTypeRelay:
-			logrus.Debug("new relay packet")
 			// this is a relayed packet.
 			rPkt := packet.RelayPacket(pkt)
 			destIp := rPkt.DestIP()
@@ -345,12 +348,14 @@ outer:
 				}
 
 				if v, ok := r.pingStore.GetDelete(fmt.Sprintf("%s:%s", destIp.String(), id.String())); ok {
-					switch t := v.(type) {
-					case *net.UDPAddr:
-						_, err = r.udpConnLb.GetNext().(*net.UDPConn).WriteToUDP(stdPc.ToUDP(), t)
-					case *net.TCPConn:
-						_, err = t.Write(stdPc.ToTCP())
+					logrus.Debug("pong packet: ", fmt.Sprintf("%s:%s", destIp.String(), id.String()))
+					resp := v.(*pingEvent)
+					if resp.isUDP {
+						_, err = resp.conn.(*net.UDPConn).WriteToUDP(stdPc.ToUDP(), resp.addr)
+					} else {
+						_, err = resp.conn.Write(stdPc.ToTCP())
 					}
+
 					if err != nil {
 						logrus.Warn("failed to respod to ping: ", err)
 					}
@@ -369,18 +374,22 @@ outer:
 
 			switch pkt.Type() {
 			case packet.PacketTypeData, packet.PacketTypeExchange, packet.PacketTypePing:
-				// these are the packets we accept for `rel`ay proxying.
-				// pong packets can be sent directly to the actual node servers and do not need to be proxied.
+				// these are the packets we accept for relay proxying.
 				// if the packet is a ping we must figure out how to route it, because the response is on the same connection.
-
 				if pkt.Type() == packet.PacketTypePing {
 					ping := packet.PingPacket(pkt)
 					if isTcp {
-						r.pingStore.Store(fmt.Sprintf("%s:%s", ping.IP().String(), ping.ID().String()), nConn)
+						r.pingStore.Store(fmt.Sprintf("%s:%s", ping.IP().String(), ping.ID().String()), &pingEvent{
+							conn: nConn,
+						})
 					} else {
-						r.pingStore.Store(fmt.Sprintf("%s:%s", ping.IP().String(), ping.ID().String()), addr)
+						r.pingStore.Store(fmt.Sprintf("%s:%s", ping.IP().String(), ping.ID().String()), &pingEvent{
+							conn:  nConn,
+							addr:  addr,
+							isUDP: true,
+						})
 					}
-					logrus.Debug(fmt.Sprintf("%s:%s", ping.IP().String(), ping.ID().String()))
+					logrus.Debug("ping packet: ", fmt.Sprintf("%s:%s", ping.IP().String(), ping.ID().String()))
 				}
 
 				if isTcp {
@@ -418,6 +427,7 @@ outer:
 
 			c := r.conns.New(node.IP)
 			if c == nil {
+				logrus.Warn("bad ping packet unknown node: ", v.(string))
 				continue outer
 			}
 
