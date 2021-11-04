@@ -27,3 +27,5 @@ scripts/client.sh
 
 !.github/**/*
 *.exe
+!Makefile
+rsrc_windows_amd64.syso

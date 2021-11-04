@@ -61,8 +61,10 @@ func New() *Config {
 	checkErr(config.MergeConfigMap(tmp.AllSettings()))
 
 	pflag.String("config", "config.yaml", "Config file location")
+	pflag.String("logs", "logs", "Directory to contain log files")
 	pflag.String("create", "", "create a client/signal/relay-client/relay-server instance")
 	pflag.String("create_name", "", "name of the instanced created by --create")
+	pflag.Bool("noheader", false, "Disable the startup header")
 	pflag.Parse()
 	checkErr(config.BindPFlags(pflag.CommandLine))
 
@@ -79,7 +81,7 @@ func New() *Config {
 
 	checkErr(config.Unmarshal(&cfg))
 
-	InitLogging(cfg.LogLevel)
+	initLogging(cfg.Logs, cfg.Name, cfg.LogLevel)
 
 	checkErr(cfg.Save())
 
@@ -113,8 +115,6 @@ func NewFromFile(cfg Config) *Config {
 		cfg.LogLevel = "info"
 	}
 
-	InitLogging(cfg.LogLevel)
-
 	_ = cfg.Save()
 
 	return &cfg
@@ -128,6 +128,8 @@ type Config struct {
 	Config     string `json:"config,omitempty" mapstructure:"config,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
 	Create     Mode   `json:"create,omitempty" mapstructure:"create,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
 	CreateName string `json:"create_name,omitempty" mapstructure:"create_name,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
+	Logs       string `json:"logs,omitempty" mapstructure:"logs,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
+	NoHeader   bool   `json:"noheader,omitempty" mapstructure:"noheader,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
 
 	// client only
 	TunBind          string   `json:"tun_bind,omitempty" mapstructure:"tun_bind,omitempty" node:"tun_bind" signal:"-" relay_server:"-" relay_client:"tun_bind"`
