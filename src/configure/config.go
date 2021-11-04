@@ -65,6 +65,7 @@ func New() *Config {
 	pflag.String("create", "", "create a client/signal/relay-client/relay-server instance")
 	pflag.String("create_name", "", "name of the instanced created by --create")
 	pflag.Bool("noheader", false, "Disable the startup header")
+	pflag.Bool("nologs", false, "Disable file logging")
 	pflag.Parse()
 	checkErr(config.BindPFlags(pflag.CommandLine))
 
@@ -81,7 +82,7 @@ func New() *Config {
 
 	checkErr(config.Unmarshal(&cfg))
 
-	initLogging(cfg.Logs, cfg.Name, cfg.LogLevel)
+	initLogging(cfg.Logs, cfg.Name, cfg.LogLevel, !cfg.NoLogs)
 
 	checkErr(cfg.Save())
 
@@ -130,6 +131,7 @@ type Config struct {
 	CreateName string `json:"create_name,omitempty" mapstructure:"create_name,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
 	Logs       string `json:"logs,omitempty" mapstructure:"logs,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
 	NoHeader   bool   `json:"noheader,omitempty" mapstructure:"noheader,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
+	NoLogs     bool   `json:"nologs,omitempty" mapstructure:"nologs,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"-"`
 
 	// client only
 	TunBind          string   `json:"tun_bind,omitempty" mapstructure:"tun_bind,omitempty" node:"tun_bind" signal:"-" relay_server:"-" relay_client:"tun_bind"`

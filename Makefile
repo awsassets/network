@@ -17,3 +17,6 @@ deps:
 	go install github.com/akavel/rsrc@latest
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+test:
+	go test ./...

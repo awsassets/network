@@ -19,7 +19,7 @@ func init() {
 	log.SetOutput(io.Discard)
 }
 
-func initLogging(logs, name, level string) {
+func initLogging(logs, name, level string, file bool) {
 	formatter := &logrus.TextFormatter{
 		ForceColors:  true,
 		PadLevelText: true,
@@ -36,18 +36,19 @@ func initLogging(logs, name, level string) {
 
 	logrus.SetOutput(colorable.NewColorableStdout())
 
-	if err := os.MkdirAll(path.Join(logs, name), 0700); err == nil {
-		file := fmt.Sprintf("%s.log", time.Now().Format(time.RFC3339))
-		if runtime.GOOS == "windows" {
-			file = strings.ReplaceAll(file, ":", ".")
+	if file {
+		if err := os.MkdirAll(path.Join(logs, name), 0700); err == nil {
+			file := fmt.Sprintf("%s.log", time.Now().Format(time.RFC3339))
+			if runtime.GOOS == "windows" {
+				file = strings.ReplaceAll(file, ":", ".")
+			}
+			logrus.AddHook(lfshook.NewHook(path.Join(logs, name, file), &logrus.TextFormatter{
+				DisableColors: true,
+				PadLevelText:  true,
+				ForceQuote:    true,
+			}))
+		} else {
+			logrus.Warn("Not logging to file: ", err)
 		}
-		logrus.AddHook(lfshook.NewHook(path.Join(logs, name, file), &logrus.TextFormatter{
-			DisableColors: true,
-			PadLevelText:  true,
-			ForceQuote:    true,
-		}))
-	} else {
-		logrus.Warn("Not logging to file: ", err)
 	}
-
 }

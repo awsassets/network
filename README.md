@@ -4,20 +4,36 @@ A VPC written in golang.
 
 Assign internal IP addresses to servers where all traffic sent internally is encrypted.
 
-## OS Building
+## OS Specific
 
-#### Linux
+#### Linux (requires root)
+
+The make file exists to help build and test code.
+
 ```
-go build .
-./network 
+$ make          # builds windows and linux
+$ make windows  # builds only windows
+$ make linux    # builds only linux
+$ make deps     # installs all dependencies 
+$ make lint     # runs the linter
+$ make test     # runs all unit tests
 ```
 
 List of arguments
 ```
-./network --help
+$ ./bin/network --help
+Usage of ./bin/network:
+      --config string        Config file location (default "config.yaml")
+      --create string        create a client/signal/relay-client/relay-server instance
+      --create_name string   name of the instanced created by --create
+      --logs string          Directory to contain log files (default "logs")
+      --noheader             Disable the startup header
+      --nologs               Disable file logging
+pflag: help requested
+exit status 2
 ```
 
-#### Windows (running relay or node requires admin)
+#### Windows (requires admin)
 
 This project makes use of wintun, the tunnel device for windows by WireGaurd.
 You will have to download the dll file.
@@ -27,16 +43,6 @@ Ie. AMD64  = 64 bit
     i386   = 32 bit
 
 You can either place the DLL next to the binary or you can install it to your `C:/Windows/System32` folder for global use.
-
-```
-go build .
-./network.exe
-```
-
-List of arguments
-```
-./network.exe --help
-```
 
 If you want the DNS to resolve inside WSL you need to do a bit of configuring.
 1. Enable a DNS_PROXY (look at Env Variables no 1)
