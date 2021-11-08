@@ -184,7 +184,7 @@ func (c *Client) HandleUDP(ctx context.Context) {
 		}(v)
 	}
 
-	tick := time.NewTicker(time.Minute)
+	tick := time.NewTicker(time.Second * 15)
 	first := true
 
 outer:
