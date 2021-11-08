@@ -1,4 +1,4 @@
-package signal
+package helpers
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -272,10 +273,6 @@ func GenerateCaTls(config *configure.Config) {
 
 	config.SignalServerPublicKey = caPEM.String()
 	config.SignalServerPrivateKey = caPrivKeyPEM.String()
-
-	if err := config.Save(); err != nil {
-		logrus.Fatalf("Failed to generate private key: %v", err)
-	}
 }
 
 var Cert = &x509.Certificate{

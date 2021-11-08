@@ -5,6 +5,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/disembark/network/src/configure"
+	"github.com/disembark/network/src/helpers"
 	"github.com/disembark/network/src/types"
 	"github.com/disembark/network/src/utils"
 	"github.com/fasthttp/websocket"
@@ -33,7 +34,7 @@ func (s *Server) Handler(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	tkn, err := VerifyClientJoinToken(s.config, utils.B2S(ctx.Request.Header.Peek("authentication")))
+	tkn, err := helpers.VerifyClientJoinToken(s.config, utils.B2S(ctx.Request.Header.Peek("authentication")))
 	if err != nil {
 		logrus.Error("bad token: ", err.Error())
 		ctx.SetStatusCode(403)
@@ -333,7 +334,7 @@ func (s *Server) signalHandler(tkn types.JoinTokenPayload, raw []byte) websocket
 					// remove the dhcp part
 					s.BroadcastNodes(msg)
 
-					tkn, err := GenerateClientJoinToken(s.config, configure.ModeSignal, s.config.Name)
+					tkn, err := helpers.GenerateClientJoinToken(s.config, configure.ModeSignal, s.config.Name)
 					if err != nil {
 						logrus.Fatal("failed to generate join token: ", err)
 					}
@@ -373,7 +374,7 @@ func (s *Server) signalHandler(tkn types.JoinTokenPayload, raw []byte) websocket
 					if changed {
 						// the signal server has changed, we must re-register it.
 
-						tkn, err := GenerateClientJoinToken(s.config, configure.ModeSignal, s.config.Name)
+						tkn, err := helpers.GenerateClientJoinToken(s.config, configure.ModeSignal, s.config.Name)
 						if err != nil {
 							logrus.Fatal("failed to generate join token: ", err)
 						}

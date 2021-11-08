@@ -17,6 +17,7 @@ import (
 	"github.com/disembark/network/src/configure"
 	"github.com/disembark/network/src/loadbalancer"
 	"github.com/disembark/network/src/modes/signal"
+	"github.com/disembark/network/src/netconn"
 	"github.com/disembark/network/src/netutil"
 	"github.com/disembark/network/src/packet"
 	"github.com/disembark/network/src/utils"
@@ -31,8 +32,8 @@ type Client struct {
 
 	http *fasthttp.Client
 
-	udpLb *loadbalancer.LoadBalancer
-	tcpLb *loadbalancer.LoadBalancer
+	udpLb loadbalancer.LoadBalancer
+	tcpLb loadbalancer.LoadBalancer
 }
 
 func NewClient(config *configure.Config) {
@@ -44,21 +45,14 @@ func NewClient(config *configure.Config) {
 
 	sig.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
 
-	node := &Client{
-		Client: base.NewClient(config),
-		http: &fasthttp.Client{
-			TLSConfig: utils.TlsConfig(config.SignalServerPublicKey),
-		},
-		udpLb: loadbalancer.NewLoadBalancer(),
-		tcpLb: loadbalancer.NewLoadBalancer(),
-	}
+	node := newClient(ctx, config)
 
 	settings, err := node.GetSettings(ctx, config.RelayServerHttp)
 	if err != nil {
 		logrus.Fatal("failed to get settings: ", err)
 	}
-
 	node.SignalClient = signal.NewClient(ctx, config, settings.AccessPoints)
+	go node.ProcessSignal()
 
 	done := make(chan struct{})
 	go func() {
@@ -77,15 +71,26 @@ func NewClient(config *configure.Config) {
 		close(done)
 	}()
 
-	go node.ProcessSignal()
-
-	go node.HandleTCP(ctx)
-	go node.HandleUDP(ctx)
-
 	<-done
 
 	logrus.Info("shutdown")
 	os.Exit(0)
+}
+
+func newClient(ctx context.Context, config *configure.Config) *Client {
+	node := &Client{
+		Client: base.NewClient(config),
+		http: &fasthttp.Client{
+			TLSConfig: utils.TlsConfig(config.SignalServerPublicKey),
+		},
+		udpLb: loadbalancer.New(),
+		tcpLb: loadbalancer.New(),
+	}
+
+	go node.HandleTCP(ctx)
+	go node.HandleUDP(ctx)
+
+	return node
 }
 
 func (c *Client) GetTokens(ctx context.Context, relay string, count int) ([]string, error) {
@@ -161,7 +166,7 @@ func (c *Client) HandleUDP(ctx context.Context) {
 
 	for _, v := range conns {
 		c.udpLb.AddItem(v)
-		go func(conn *net.UDPConn) {
+		go func(conn netconn.UDPConn) {
 			pc := packet.NewConstructor()
 
 			for {
@@ -292,7 +297,7 @@ outer:
 			}
 		}
 
-		lb := loadbalancer.NewLoadBalancer()
+		lb := loadbalancer.New()
 		for _, v := range conns {
 			lb.AddItem(v)
 			go func(conn net.Conn) {

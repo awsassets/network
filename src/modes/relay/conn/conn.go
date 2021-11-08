@@ -4,46 +4,60 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/disembark/network/src/loadbalancer"
+	"github.com/disembark/network/src/netconn"
 	"github.com/disembark/network/src/packet"
-
-	node_store "github.com/disembark/network/src/store/node"
 
 	"github.com/sirupsen/logrus"
 )
 
-type Store struct {
-	mp        *sync.Map
-	nodes     *node_store.Store
-	udpConnLb *loadbalancer.LoadBalancer
+var ErrNoRoute = fmt.Errorf("unable to route")
+
+type Conn interface {
+	RegisterPing(conn net.Conn)
+	StopTCP()
+	RegisterPingUDP(addr *net.UDPAddr)
+	WriteUDP(pkt packet.TcpPacket) error
+	WriteTCP(pkt packet.TcpPacket) error
 }
 
-func New(nodes *node_store.Store, lb *loadbalancer.LoadBalancer) *Store {
-	s := &Store{
-		mp:        &sync.Map{},
-		nodes:     nodes,
-		udpConnLb: lb,
-	}
-
-	go s.runner()
-
-	return s
+type MockConnInstance struct {
+	RegisterPingFunc    func(conn net.Conn)
+	StopTCPFunc         func()
+	RegisterPingUDPFunc func(addr *net.UDPAddr)
+	WriteUDPFunc        func(pkt packet.TcpPacket) error
+	WriteTCPFunc        func(pkt packet.TcpPacket) error
 }
 
-type Conn struct {
+func (m MockConnInstance) RegisterPing(conn net.Conn) {
+	m.RegisterPingFunc(conn)
+}
+
+func (m MockConnInstance) StopTCP() {
+	m.StopTCPFunc()
+}
+
+func (m MockConnInstance) WriteUDP(pkt packet.TcpPacket) error {
+	return m.WriteUDPFunc(pkt)
+}
+
+func (m MockConnInstance) WriteTCP(pkt packet.TcpPacket) error {
+	return m.WriteTCPFunc(pkt)
+}
+
+type ConnInstance struct {
 	name string
 	ip   string
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	udpConnLb *loadbalancer.LoadBalancer
+	udpConnLb loadbalancer.LoadBalancer
 
 	udpAddr *net.UDPAddr
-	connTcp *net.TCPConn
+	connTcp net.Conn
 
 	lastPing    time.Time
 	lastUdpPing time.Time
@@ -51,99 +65,35 @@ type Conn struct {
 	lastWarnTCP time.Time
 	lastWarnUDP time.Time
 
+	forceUDP bool
+	forceTCP bool
+
 	deleted bool
 }
 
-func (c *Store) Stop(ip string) {
-	if v, ok := c.mp.LoadAndDelete(ip); ok {
-		conn := v.(*Conn)
-		conn.deleted = true
-
-		logrus.Debugf("cleaning up connection: %s - %s", conn.name, conn.ip)
-
-		conn.cancel()
-	}
-}
-
-func (c *Store) Get(ip string) *Conn {
-	if v, ok := c.mp.Load(ip); ok {
-		return v.(*Conn)
-	}
-
-	return nil
-}
-
-func (c *Store) New(ip string) *Conn {
-	node, ok := c.nodes.GetNode(ip)
-	if !ok {
-		return nil
-	}
-
-	if !node.Relay {
-		return nil
-	}
-
-	conn := &Conn{
-		ip:        node.IP,
-		name:      node.Name,
-		lastPing:  time.Now(),
-		udpConnLb: c.udpConnLb,
-	}
-
-	if v, ok := c.mp.LoadOrStore(node.IP, conn); ok {
-		return v.(*Conn)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	conn.ctx = ctx
-	conn.cancel = cancel
-
-	return conn
-}
-
-func (c *Store) runner() {
-	tick := time.NewTicker(time.Minute * 5)
-	for range tick.C {
-		c.cleanup()
-	}
-}
-
-func (c *Store) cleanup() {
-	c.mp.Range(func(key, value interface{}) bool {
-		conn := value.(*Conn)
-
-		if conn.lastPing.Before(time.Now().Add(-time.Minute * 10)) {
-			c.Stop(conn.ip)
-		}
-
-		return true
-	})
-}
-
-func (c *Conn) RegisterPing(conn *net.TCPConn) {
+func (c *ConnInstance) RegisterPing(conn net.Conn) {
 	c.lastPing = time.Now()
 	c.connTcp = conn
 }
 
-func (c *Conn) StopTCP() {
+func (c *ConnInstance) StopTCP() {
 	c.connTcp = nil
 }
 
-func (c *Conn) RegisterPingUDP(addr *net.UDPAddr) {
+func (c *ConnInstance) RegisterPingUDP(addr *net.UDPAddr) {
 	c.lastPing = time.Now()
 	c.lastUdpPing = time.Now()
 
 	c.udpAddr = addr
 }
 
-func (c *Conn) udpValid() bool {
+func (c *ConnInstance) udpValid() bool {
 	return c.udpAddr != nil && c.lastUdpPing.Add(time.Minute*5).After(time.Now())
 }
 
-func (c *Conn) WriteUDP(pkt packet.TcpPacket) error {
-	if !c.udpValid() {
-		if c.connTcp == nil {
+func (c *ConnInstance) WriteUDP(pkt packet.TcpPacket) error {
+	if !c.udpValid() || c.forceTCP {
+		if c.connTcp == nil || c.forceUDP {
 			// fallback to udp if we cannot use tcp
 			if c.lastWarnUDP.Before(time.Now().Add(-time.Second * 5)) {
 				logrus.Warnf("both udp and tcp seem to be down for node: %s - %s", c.name, c.ip)
@@ -151,7 +101,7 @@ func (c *Conn) WriteUDP(pkt packet.TcpPacket) error {
 			} else {
 				logrus.Debugf("both udp and tcp seem to be down for node:  %s - %s", c.name, c.ip)
 			}
-			return fmt.Errorf("unable to route")
+			return ErrNoRoute
 		}
 
 		// fallback to udp if we cannot use tcp
@@ -170,14 +120,14 @@ func (c *Conn) WriteUDP(pkt packet.TcpPacket) error {
 	}
 
 	logrus.Debugf("writing udp packet to %s - %s", c.name, c.ip)
-	_, err := c.udpConnLb.GetNext().(*net.UDPConn).WriteToUDP(pkt.ToPacket(), c.udpAddr)
+	_, err := c.udpConnLb.GetNext().(netconn.UDPConn).WriteToUDP(pkt.ToPacket(), c.udpAddr)
 
 	return err
 }
 
-func (c *Conn) WriteTCP(pkt packet.TcpPacket) error {
-	if c.connTcp == nil {
-		if !c.udpValid() {
+func (c *ConnInstance) WriteTCP(pkt packet.TcpPacket) error {
+	if c.connTcp == nil || c.forceUDP {
+		if !c.udpValid() || c.forceTCP {
 			// fallback to udp if we cannot use tcp
 			if c.lastWarnTCP.Before(time.Now().Add(-time.Second * 5)) {
 				logrus.Warnf("both udp and tcp seem to be down for node: %s - %s", c.name, c.ip)
@@ -185,7 +135,7 @@ func (c *Conn) WriteTCP(pkt packet.TcpPacket) error {
 			} else {
 				logrus.Debugf("both udp and tcp seem to be down for node:  %s - %s", c.name, c.ip)
 			}
-			return fmt.Errorf("unable to route")
+			return ErrNoRoute
 		}
 
 		// fallback to udp if we cannot use tcp

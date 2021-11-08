@@ -13,6 +13,7 @@ type NetworkInterface interface {
 	GetNext() Device
 	ConfigureDNS() (string, error)
 	Name() string
+	Stop() error
 }
 
 func CreateTun() NetworkInterface {

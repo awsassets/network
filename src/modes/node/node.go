@@ -20,21 +20,20 @@ import (
 
 type Node struct {
 	*base.Client
+
+	udpConns []*net.UDPConn
+	tcpConns []*net.TCPListener
 }
 
 func New(config *configure.Config) {
 	logrus.Info("starting node")
 	ctx, cancel := context.WithCancel(context.Background())
-
 	ch := make(chan os.Signal, 1)
-
 	sig.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
 
-	node := &Node{
-		Client: base.NewClient(config),
-	}
-
+	node := newNode(config)
 	node.SignalClient = signal.NewClient(ctx, config, config.AdvertiseAddresses)
+	go node.ProcessSignal()
 
 	done := make(chan struct{})
 	go func() {
@@ -53,7 +52,16 @@ func New(config *configure.Config) {
 		close(done)
 	}()
 
-	go node.ProcessSignal()
+	<-done
+
+	logrus.Info("shutdown")
+	os.Exit(0)
+}
+
+func newNode(config *configure.Config) *Node {
+	node := &Node{
+		Client: base.NewClient(config),
+	}
 
 	udpConns, err := netutil.ListenUDP(config.Bind)
 	if err != nil {
@@ -61,10 +69,10 @@ func New(config *configure.Config) {
 	}
 
 	for _, v := range udpConns {
-		defer v.Close()
-
 		go node.ListenConn(v)
 	}
+
+	node.udpConns = udpConns
 
 	tcpConns, err := netutil.ListenTCP(config.Bind)
 	if err != nil {
@@ -72,15 +80,12 @@ func New(config *configure.Config) {
 	}
 
 	for _, v := range tcpConns {
-		defer v.Close()
-
 		go node.ListenTCP(v)
 	}
 
-	<-done
+	node.tcpConns = tcpConns
 
-	logrus.Info("shutdown")
-	os.Exit(0)
+	return node
 }
 
 func (r *Node) ListenConn(conn net.Conn) {
@@ -102,6 +107,7 @@ func (r *Node) ListenConn(conn net.Conn) {
 			if err := pc.ReadTCP(c); err != nil {
 				return
 			}
+
 			r.HandlePacket(pc, conn, nil, false, false)
 		}
 	}
@@ -114,5 +120,16 @@ func (r *Node) ListenTCP(ln *net.TCPListener) {
 			continue
 		}
 		go r.ListenConn(conn)
+	}
+}
+
+func (r *Node) Stop() {
+	r.Client.Stop()
+
+	for _, v := range r.tcpConns {
+		_ = v.Close()
+	}
+	for _, v := range r.udpConns {
+		_ = v.Close()
 	}
 }

@@ -21,7 +21,7 @@ var (
 	ErrSignalEntryStopped  = fmt.Errorf("signal entry stopped")
 )
 
-type Entry struct {
+type entry struct {
 	Server  configure.SignalServer
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -32,7 +32,7 @@ type Entry struct {
 	tkn     string
 }
 
-func (e *Entry) Start(s *Store) {
+func (e *entry) start(s *SignalStore) {
 	s.wg.Add(1)
 	defer s.wg.Done()
 	// todo connect to signal servers and forward messages to the store
@@ -76,7 +76,7 @@ func (e *Entry) Start(s *Store) {
 	}
 }
 
-func (e *Entry) read(msgs chan Message) {
+func (e *entry) read(msgs chan Message) {
 	var (
 		data []byte
 		err  error
@@ -101,7 +101,7 @@ func (e *Entry) read(msgs chan Message) {
 	}
 }
 
-func (e *Entry) Write(msg types.Message) error {
+func (e *entry) Write(msg types.Message) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func (e *Entry) Write(msg types.Message) error {
 	return e.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (e *Entry) new(ctx context.Context, config *configure.Config, dialer websocket.Dialer) *websocket.Conn {
+func (e *entry) new(ctx context.Context, config *configure.Config, dialer websocket.Dialer) *websocket.Conn {
 	var (
 		conn *websocket.Conn
 		err  error

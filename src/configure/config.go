@@ -116,8 +116,6 @@ func NewFromFile(cfg Config) *Config {
 		cfg.LogLevel = "info"
 	}
 
-	_ = cfg.Save()
-
 	return &cfg
 }
 
@@ -157,6 +155,8 @@ type Config struct {
 	// relay client only
 	RelayServerHttp string `json:"relay_server_http,omitempty" mapstructure:"relay_server_http,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"relay_server_http"`
 	RelayServer     string `json:"relay_server,omitempty" mapstructure:"relay_server,omitempty" node:"-" signal:"-" relay_server:"-" relay_client:"relay_server"`
+
+	isMock bool
 }
 
 type SignalServer struct {
@@ -174,7 +174,7 @@ const (
 )
 
 func (s *Config) Save() error {
-	if s.Config == "" {
+	if s.Config == "" || s.isMock {
 		return nil
 	}
 
@@ -209,4 +209,12 @@ func (s *Config) Save() error {
 	tmp.SetConfigFile(s.Config)
 
 	return tmp.WriteConfig()
+}
+
+func (s *Config) MockConfig() {
+	s.isMock = true
+}
+
+func (s *Config) IsMock() bool {
+	return s.isMock
 }

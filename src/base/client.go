@@ -13,6 +13,7 @@ import (
 
 	"github.com/disembark/network/src/configure"
 	"github.com/disembark/network/src/modes/signal"
+	"github.com/disembark/network/src/netconn"
 	"github.com/disembark/network/src/netutil"
 	"github.com/disembark/network/src/network"
 	"github.com/disembark/network/src/packet"
@@ -30,12 +31,12 @@ import (
 )
 
 type Client struct {
-	NodeStore *node_store.Store
-	ConnStore *conn_store.Store
-	AesStore  *aes_store.Store
-	DnsStore  *dns_store.Store
+	NodeStore node_store.Store
+	ConnStore conn_store.Store
+	AesStore  aes_store.Store
+	DnsStore  dns_store.Store
 
-	SignalClient *signal.Client
+	SignalClient signal.Client
 
 	State types.JoinPayloadNode
 	IP    *string
@@ -50,7 +51,13 @@ type Client struct {
 
 func NewClient(config *configure.Config) *Client {
 	netInt := network.CreateTun()
-	dns := dns_store.New()
+
+	var dns dns_store.Store
+	if config.IsMock() {
+		dns = dns_store.New("127.10.0.53:0")
+	} else {
+		dns = dns_store.New()
+	}
 
 	nodes := node_store.NewWithDns(dns)
 
@@ -150,9 +157,11 @@ func (c *Client) ProcessSignal() {
 					c.Config.SignalServers[i].AccessPoints = pl.Signal.AccessPoints
 				}
 			}
+
 			if !found {
 				c.Config.SignalServers = append(c.Config.SignalServers, pl.Signal.SignalServer)
 			}
+
 			for _, sig := range pl.Signal.Signals {
 				found := false
 				for i, v := range c.Config.SignalServers {
@@ -172,15 +181,10 @@ func (c *Client) ProcessSignal() {
 }
 
 func (c *Client) ProcessDevice(dev network.Device) {
-	relayPc := packet.NewConstructor()
-	stdPc := packet.NewConstructorWithBuffer(relayPc.Buffer()[packet.RelayPacketHeaderLength-packet.TCPHeaderLength:])
-	// since we are doing aes encryption on this data, we need to make the packet data slightly bigger to allow for the aes padding to be at the beginning.
-	// to avoid copying data from one buffer to another we must use the pc buffer here otherwise we end up with copying data.
-	ifaceBuff := stdPc.Buffer() // this is a raw packet buffer and will result in a bad packet if we read from it, so we must not do that.
-	// we want to make sure the network packet data lands where it is going to be in the final data packet.
-	// to do this we must look at where the data should be.
-	// There is a header for the datapacket which needs to be offset here.
-	// we need to check if this changes ever so that we can update the underlying buffer with the new ip to avoid copying data
+	pc := packet.NewRelayConstructor()
+
+	ifaceBuff := pc.Standard.Buffer() // this is a raw packet buffer and will result in a bad packet if we read from it, so we must not do that.
+
 	currentIp := *c.IP
 
 	for i, v := range net.ParseIP(*c.IP).To4() {
@@ -201,7 +205,7 @@ func (c *Client) ProcessDevice(dev network.Device) {
 			continue
 		}
 
-		srcAddr, dstAddr, isTcp := netutil.GetAddr(pkt)
+		srcAddr, dstAddr, proto := netutil.GetAddr(pkt)
 		if srcAddr == "" || dstAddr == "" {
 			continue
 		}
@@ -225,11 +229,11 @@ func (c *Client) ProcessDevice(dev network.Device) {
 
 		var tcpPkt packet.TcpPacket
 		if node.Relay {
-			relayPc.MakeRelayDataPacketSize(n+aes.BlockSize, net.ParseIP(node.IP))
-			tcpPkt = relayPc.ToTCP()
+			pc.Relay.MakeRelayDataPacketSize(n+aes.BlockSize, net.ParseIP(node.IP))
+			tcpPkt = pc.Relay.ToTCP()
 		} else {
-			stdPc.MakeDataPacketSize(n + aes.BlockSize)
-			tcpPkt = stdPc.ToTCP()
+			pc.Standard.MakeDataPacketSize(n + aes.BlockSize)
+			tcpPkt = pc.Standard.ToTCP()
 		}
 
 		if *c.IP != currentIp {
@@ -240,7 +244,7 @@ func (c *Client) ProcessDevice(dev network.Device) {
 			}
 		}
 
-		if isTcp {
+		if proto == waterutil.TCP {
 			_ = conn.WriteTCP(tcpPkt)
 		} else {
 			_ = conn.WriteUDP(tcpPkt)
@@ -291,7 +295,7 @@ func (c *Client) HandlePacket(pc *packet.PacketConstructor, conn net.Conn, addr 
 		}
 
 		destIp := netutil.RemovePort(dstAddr)
-		if destIp != c.State.IP {
+		if destIp != *c.IP {
 			logrus.Warn("bad packet from ext unknown ip dest: ", destIp)
 			return
 		}
@@ -354,7 +358,7 @@ func (c *Client) HandlePacket(pc *packet.PacketConstructor, conn net.Conn, addr 
 						return
 					}
 				} else {
-					if _, err := conn.(*net.UDPConn).WriteToUDP(pc.ToUDP(), addr); err != nil {
+					if _, err := conn.(netconn.UDPConn).WriteToUDP(pc.ToUDP(), addr); err != nil {
 						logrus.Warnf("failed to respond to ping: %v", err)
 						return
 					}
@@ -389,7 +393,7 @@ func (c *Client) HandlePacket(pc *packet.PacketConstructor, conn net.Conn, addr 
 						return
 					}
 				} else {
-					if _, err := conn.(*net.UDPConn).WriteToUDP(pc.ToUDP(), addr); err != nil {
+					if _, err := conn.(netconn.UDPConn).WriteToUDP(pc.ToUDP(), addr); err != nil {
 						logrus.Warnf("failed to respond to ping: %v", err)
 						return
 					}
@@ -405,5 +409,20 @@ func (c *Client) HandlePacket(pc *packet.PacketConstructor, conn net.Conn, addr 
 		}
 	default:
 		logrus.Warnf("unsupported packet type: %d", pkt.Type())
+	}
+}
+
+func (c *Client) Stop() {
+	if c.DnsStore != nil {
+		c.DnsStore.Stop()
+	}
+	if c.Network != nil {
+		_ = c.Network.Stop()
+	}
+	if c.AesStore != nil {
+		c.AesStore.Stop()
+	}
+	if c.NodeStore != nil {
+		c.NodeStore.Stop()
 	}
 }

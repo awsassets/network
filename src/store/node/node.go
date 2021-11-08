@@ -13,29 +13,69 @@ import (
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
-type Store struct {
-	cache *cache.Cache
-	dns   *dns_store.Store
+type Store interface {
+	Stop()
+	GetNode(name string) (Node, bool)
+	SetNode(name string, node Node)
+	Serialize() []cache.CacheItem
+	Merge(items []cache.CacheItem)
+}
+
+type MockNodeStore struct {
+	StopFunc      func()
+	GetNodeFunc   func(name string) (Node, bool)
+	SetNodeFunc   func(name string, node Node)
+	SerializeFunc func() []cache.CacheItem
+	MergeFunc     func(items []cache.CacheItem)
+}
+
+func (n MockNodeStore) Stop() {
+	n.StopFunc()
+}
+
+func (n MockNodeStore) GetNode(name string) (Node, bool) {
+	return n.GetNodeFunc(name)
+}
+
+func (n MockNodeStore) SetNode(name string, node Node) {
+	n.SetNodeFunc(name, node)
+}
+
+func (n MockNodeStore) Serialize() []cache.CacheItem {
+	return n.SerializeFunc()
+}
+
+func (n MockNodeStore) Merge(items []cache.CacheItem) {
+	n.MergeFunc(items)
+}
+
+type NodeStore struct {
+	cache cache.Cache
+	dns   dns_store.Store
 }
 
 type Node struct {
 	types.JoinPayloadNode
 }
 
-func New() *Store {
-	return &Store{
+func New() Store {
+	return &NodeStore{
 		cache: cache.New(time.Minute, time.Minute*30),
 	}
 }
 
-func NewWithDns(dns *dns_store.Store) *Store {
-	return &Store{
+func NewWithDns(dns dns_store.Store) Store {
+	return &NodeStore{
 		cache: cache.New(time.Minute, time.Minute*30),
 		dns:   dns,
 	}
 }
 
-func (n *Store) GetNode(name string) (Node, bool) {
+func (n *NodeStore) Stop() {
+	n.cache.Stop()
+}
+
+func (n *NodeStore) GetNode(name string) (Node, bool) {
 	obj, ok := n.cache.Get(name)
 	if ok {
 		return obj.(Node), true
@@ -44,7 +84,7 @@ func (n *Store) GetNode(name string) (Node, bool) {
 	return Node{}, false
 }
 
-func (n *Store) SetNode(name string, node Node) {
+func (n *NodeStore) SetNode(name string, node Node) {
 	logrus.Debugf("new node: %s - %s", name, node.IP)
 	if v, ok := n.cache.Get(name); ok {
 		item := v.(Node)
@@ -64,11 +104,11 @@ func (n *Store) SetNode(name string, node Node) {
 	}
 }
 
-func (n *Store) Serialize() []cache.CacheItem {
+func (n *NodeStore) Serialize() []cache.CacheItem {
 	return n.cache.ItemsArray()
 }
 
-func (n *Store) Merge(items []cache.CacheItem) {
+func (n *NodeStore) Merge(items []cache.CacheItem) {
 	for _, v := range items {
 		if v.Expired() {
 			continue

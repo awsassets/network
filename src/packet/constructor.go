@@ -5,11 +5,32 @@ import (
 	"fmt"
 	"io"
 	"net"
+
+	"github.com/disembark/network/src/netconn"
 )
 
 type PacketConstructor struct {
 	buf  []byte
 	size uint16
+}
+
+type RelayPacketConstructor struct {
+	Relay    *PacketConstructor
+	Standard *PacketConstructor
+}
+
+func NewRelayConstructor() *RelayPacketConstructor {
+	// we want to make sure the network packet data lands where it is going to be in the final data packet.
+	// to do this we must look at where the data should be.
+	// There is a header for the datapacket which needs to be offset here.
+	// we need to check if this changes ever so that we can update the underlying buffer with the new ip to avoid copying data
+	relayPc := NewConstructor()
+	stdPc := NewConstructorWithBuffer(relayPc.Buffer()[RelayPacketHeaderLength-TCPHeaderLength:])
+
+	return &RelayPacketConstructor{
+		Relay:    relayPc,
+		Standard: stdPc,
+	}
 }
 
 type (
@@ -99,7 +120,7 @@ func (p *PacketConstructor) ReadTCP(read io.Reader) error {
 	return err
 }
 
-func (p *PacketConstructor) ReadUDP(read *net.UDPConn) (*net.UDPAddr, error) {
+func (p *PacketConstructor) ReadUDP(read netconn.UDPConn) (*net.UDPAddr, error) {
 	n, addr, err := read.ReadFromUDP(p.buf[TCPHeaderLength:])
 
 	p.SetSize(uint16(n))

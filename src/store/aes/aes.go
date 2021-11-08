@@ -3,11 +3,6 @@ package aes_store
 import (
 	"context"
 	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/hex"
-	"errors"
-	"io"
 	"time"
 
 	"github.com/disembark/network/src/cache"
@@ -16,15 +11,57 @@ import (
 
 const BlockSize = aes.BlockSize
 
-type Store struct {
-	mp     *cache.Cache
+type AesStore struct {
+	mp     cache.Cache
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func New() *Store {
+type MockAesStore struct {
+	NewFunc      func(name string) Key
+	GetFunc      func(name string) Key
+	GetOrNewFunc func(name string) (Key, bool)
+	StoreFunc    func(name string, key []byte)
+	ReviveFunc   func(name string)
+	StopFunc     func()
+}
+
+func (a MockAesStore) New(name string) Key {
+	return a.NewFunc(name)
+}
+
+func (a MockAesStore) Get(name string) Key {
+	return a.GetFunc(name)
+}
+
+func (a MockAesStore) GetOrNew(name string) (Key, bool) {
+	return a.GetOrNewFunc(name)
+}
+
+func (a MockAesStore) Store(name string, key []byte) {
+	a.StoreFunc(name, key)
+}
+
+func (a MockAesStore) Revive(name string) {
+	a.ReviveFunc(name)
+}
+
+func (a MockAesStore) Stop() {
+	a.StopFunc()
+}
+
+type Store interface {
+	New(name string) Key
+	Get(name string) Key
+	GetOrNew(name string) (Key, bool)
+	Store(name string, key []byte)
+	Revive(name string)
+	Stop()
+}
+
+func New() Store {
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &Store{
+	a := &AesStore{
 		mp:     cache.New(time.Minute*5, time.Minute*30),
 		ctx:    ctx,
 		cancel: cancel,
@@ -33,81 +70,44 @@ func New() *Store {
 	return a
 }
 
-func (a *Store) New(name string) *Key {
-	key := &Key{
-		key: utils.OrPanic(utils.GenerateRandomBytes(32))[0].([]byte),
+func (a *AesStore) New(name string) Key {
+	key := AesKey{
+		KeyBytes: utils.OrPanic(utils.GenerateRandomBytes(32))[0].([]byte),
 	}
 	a.mp.Store(name, key)
 	return key
 }
 
-func (a *Store) Get(name string) *Key {
+func (a *AesStore) Get(name string) Key {
 	if v, ok := a.mp.Get(name); ok {
-		return v.(*Key)
+		return v.(AesKey)
 	}
 
 	return nil
 }
 
-func (a *Store) GetOrNew(name string) (*Key, bool) {
-	key := &Key{
-		key: utils.OrPanic(utils.GenerateRandomBytes(32))[0].([]byte),
+func (a *AesStore) GetOrNew(name string) (Key, bool) {
+	key := AesKey{
+		KeyBytes: utils.OrPanic(utils.GenerateRandomBytes(32))[0].([]byte),
 	}
 
 	if v, ok := a.mp.StoreOrGet(name, key); ok {
-		return v.(*Key), false
+		return v.(AesKey), false
 	}
 
 	return key, true
 }
 
-func (a *Store) Store(name string, key []byte) {
-	a.mp.Store(name, &Key{
-		key: key,
+func (a *AesStore) Store(name string, key []byte) {
+	a.mp.Store(name, AesKey{
+		KeyBytes: key,
 	})
 }
 
-func (a *Store) Revive(name string) {
+func (a *AesStore) Revive(name string) {
 	a.mp.Expire(name, time.Now().Add(time.Minute*30))
 }
 
-type Key struct {
-	key []byte
-}
-
-func (a *Key) Key() string {
-	return hex.EncodeToString(a.key)
-}
-
-func (a *Key) KeyRaw() []byte {
-	return a.key
-}
-
-func (a *Key) Encrypt(data []byte) ([]byte, error) {
-	block, err := aes.NewCipher(a.key)
-	if err != nil {
-		return nil, err
-	}
-	iv := data[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, err
-	}
-	cfb := cipher.NewCFBEncrypter(block, iv)
-	cfb.XORKeyStream(data[aes.BlockSize:], data[aes.BlockSize:])
-	return data, nil
-}
-
-func (a *Key) Decrypt(data []byte) ([]byte, error) {
-	block, err := aes.NewCipher(a.key)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) < aes.BlockSize {
-		return nil, errors.New("ciphertext too short")
-	}
-	iv := data[:aes.BlockSize]
-	data = data[aes.BlockSize:]
-	cfb := cipher.NewCFBDecrypter(block, iv)
-	cfb.XORKeyStream(data, data)
-	return data, nil
+func (a *AesStore) Stop() {
+	a.mp.Stop()
 }

@@ -5,7 +5,18 @@ import (
 	"time"
 )
 
-type CacheArray struct {
+type CacheArray interface {
+	Stop()
+	Store(key string, secondKey string, value interface{})
+	StoreExpiry(key string, secondKey string, value interface{}, expiry time.Time)
+	Get(key string) ([]interface{}, bool)
+	GetFirst(key string) (interface{}, bool)
+	Delete(key string, secondKey string)
+	ItemsArray() []CacheArrayItem
+	Items() map[string]CacheArrayItem
+}
+
+type cacheArray struct {
 	dirty   sync.Map
 	mtx     sync.Mutex
 	cleanup time.Duration
@@ -26,7 +37,7 @@ func (c CacheArrayItem) Expired() bool {
 	return !c.firstExpire.IsZero() && time.Now().After(c.firstExpire)
 }
 
-func NewArray(cleanup time.Duration, expire time.Duration) *CacheArray {
+func NewArray(cleanup time.Duration, expire time.Duration) CacheArray {
 	if cleanup < 0 {
 		cleanup = 0
 	}
@@ -34,7 +45,7 @@ func NewArray(cleanup time.Duration, expire time.Duration) *CacheArray {
 		expire = 0
 	}
 
-	c := &CacheArray{
+	c := &cacheArray{
 		cleanup: cleanup,
 		expire:  expire,
 		doneCh:  make(chan struct{}),
@@ -46,7 +57,7 @@ func NewArray(cleanup time.Duration, expire time.Duration) *CacheArray {
 	return c
 }
 
-func (c *CacheArray) clean() {
+func (c *cacheArray) clean() {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
@@ -84,7 +95,7 @@ func (c *CacheArray) clean() {
 	})
 }
 
-func (c *CacheArray) worker() {
+func (c *cacheArray) worker() {
 	tick := time.NewTicker(c.cleanup)
 	for {
 		select {
@@ -96,7 +107,7 @@ func (c *CacheArray) worker() {
 	}
 }
 
-func (c *CacheArray) Stop() {
+func (c *cacheArray) Stop() {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	if c.isDone {
@@ -107,7 +118,7 @@ func (c *CacheArray) Stop() {
 	close(c.doneCh)
 }
 
-func (c *CacheArray) Store(key string, secondKey string, value interface{}) {
+func (c *cacheArray) Store(key string, secondKey string, value interface{}) {
 	expiry := time.Time{}
 	if c.expire != 0 {
 		expiry = time.Now().Add(c.expire)
@@ -116,7 +127,7 @@ func (c *CacheArray) Store(key string, secondKey string, value interface{}) {
 	c.StoreExpiry(key, secondKey, value, expiry)
 }
 
-func (c *CacheArray) StoreExpiry(key string, secondKey string, value interface{}, expiry time.Time) {
+func (c *cacheArray) StoreExpiry(key string, secondKey string, value interface{}, expiry time.Time) {
 	if expiry.Before(time.Now()) {
 		return
 	}
@@ -174,7 +185,7 @@ func (c *CacheArray) StoreExpiry(key string, secondKey string, value interface{}
 	item.Items = newItems[:i]
 }
 
-func (c *CacheArray) Get(key string) ([]interface{}, bool) {
+func (c *cacheArray) Get(key string) ([]interface{}, bool) {
 	i, ok := c.dirty.Load(key)
 	if !ok {
 		return nil, false
@@ -219,7 +230,7 @@ func (c *CacheArray) Get(key string) ([]interface{}, bool) {
 	return arr, true
 }
 
-func (c *CacheArray) GetFirst(key string) (interface{}, bool) {
+func (c *cacheArray) GetFirst(key string) (interface{}, bool) {
 	i, ok := c.dirty.Load(key)
 	if !ok {
 		return nil, false
@@ -259,7 +270,7 @@ func (c *CacheArray) GetFirst(key string) (interface{}, bool) {
 	return item.Items[0].Object, true
 }
 
-func (c *CacheArray) Delete(key string, secondKey string) {
+func (c *cacheArray) Delete(key string, secondKey string) {
 	if secondKey == "" {
 		if v, ok := c.dirty.LoadAndDelete(key); ok {
 			item := v.(*CacheArrayItem)
@@ -301,7 +312,7 @@ func (c *CacheArray) Delete(key string, secondKey string) {
 	}
 }
 
-func (c *CacheArray) ItemsArray() []CacheArrayItem {
+func (c *cacheArray) ItemsArray() []CacheArrayItem {
 	items := []CacheArrayItem{}
 	c.dirty.Range(func(key, value interface{}) bool {
 		item := value.(*CacheArrayItem)
@@ -342,7 +353,7 @@ func (c *CacheArray) ItemsArray() []CacheArrayItem {
 	return items
 }
 
-func (c *CacheArray) Items() map[string]CacheArrayItem {
+func (c *cacheArray) Items() map[string]CacheArrayItem {
 	items := map[string]CacheArrayItem{}
 	c.dirty.Range(func(key, value interface{}) bool {
 		item := value.(*CacheArrayItem)

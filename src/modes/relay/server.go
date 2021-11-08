@@ -13,8 +13,10 @@ import (
 
 	"github.com/disembark/network/src/cache"
 	"github.com/disembark/network/src/configure"
+	"github.com/disembark/network/src/helpers"
 	"github.com/disembark/network/src/loadbalancer"
 	"github.com/disembark/network/src/modes/signal"
+	"github.com/disembark/network/src/netconn"
 	"github.com/disembark/network/src/netutil"
 	"github.com/disembark/network/src/packet"
 	"github.com/disembark/network/src/types"
@@ -33,19 +35,20 @@ import (
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type Server struct {
-	nodes *node_store.Store
+	nodes node_store.Store
+	conns conn_store.Store
 
-	client *signal.Client
+	client signal.Client
 
 	config     *configure.Config
-	tokenStore *cache.Cache
-	pingStore  *cache.Cache
+	tokenStore cache.Cache
+	pingStore  cache.Cache
 
-	conns *conn_store.Store
+	udpConnLb loadbalancer.LoadBalancer
 
-	udpConnLb *loadbalancer.LoadBalancer
-
-	startTime int64
+	tcpConns []*net.TCPListener
+	udpConns []*net.UDPConn
+	http     *fasthttp.Server
 }
 
 type pingEvent struct {
@@ -62,53 +65,11 @@ func NewServer(config *configure.Config) {
 
 	sig.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
 
-	nodes := node_store.New()
+	server := newServer(config)
 
-	udpConns, err := netutil.ListenUDP(config.Bind)
-	if err != nil {
-		logrus.Fatal("failed to listen on udp socket: ", err)
-	}
-
-	lb := loadbalancer.NewLoadBalancer()
-
-	server := &Server{
-		nodes:      nodes,
-		client:     signal.NewClient(ctx, config, nil),
-		config:     config,
-		startTime:  time.Now().UnixNano(),
-		tokenStore: cache.New(time.Minute*5, time.Minute),
-		pingStore:  cache.New(time.Minute*5, time.Minute),
-		conns:      conn_store.New(nodes, lb),
-		udpConnLb:  lb,
-	}
-
-	s := &fasthttp.Server{
-		Handler: server.HttpHandler,
-		Logger:  logrus.New(),
-		Name:    "disembark",
-	}
-
-	go func() {
-		if err := s.ListenAndServeTLSEmbed(config.RelayHttpBind, utils.S2B(config.SignalServerPublicKey), utils.S2B(config.SignalServerPrivateKey)); err != nil {
-			logrus.Fatal("error in ListenAndServe: ", err)
-		}
-	}()
-
-	go server.ProcessSignal()
-
-	for _, v := range udpConns {
-		lb.AddItem(v)
-		defer v.Close()
-		go server.ProcessConn(v)
-	}
-
-	tcpConns, err := netutil.ListenTCP(config.Bind)
-	if err != nil {
-		logrus.Fatal("failed to listen on udp socket: ", err)
-	}
-	for _, v := range tcpConns {
-		defer v.Close()
-		go server.ListenTCP(v)
+	if !config.IsMock() {
+		server.client = signal.NewClient(ctx, config, nil)
+		go server.ProcessSignal()
 	}
 
 	done := make(chan struct{})
@@ -134,6 +95,60 @@ func NewServer(config *configure.Config) {
 	os.Exit(0)
 }
 
+func newServer(config *configure.Config) *Server {
+	nodes := node_store.New()
+
+	udpConns, err := netutil.ListenUDP(config.Bind)
+	if err != nil {
+		logrus.Fatal("failed to listen on udp socket: ", err)
+	}
+
+	lb := loadbalancer.New()
+
+	server := &Server{
+		nodes:      nodes,
+		config:     config,
+		tokenStore: cache.New(time.Minute*5, time.Minute),
+		pingStore:  cache.New(time.Minute*5, time.Minute),
+		conns:      conn_store.New(nodes, lb),
+		udpConnLb:  lb,
+	}
+
+	s := &fasthttp.Server{
+		Handler:          server.HttpHandler,
+		Logger:           logrus.New(),
+		Name:             "disembark",
+		DisableKeepalive: true,
+		GetOnly:          true,
+		IdleTimeout:      time.Second,
+	}
+
+	go func() {
+		if err := s.ListenAndServeTLSEmbed(config.RelayHttpBind, utils.S2B(config.SignalServerPublicKey), utils.S2B(config.SignalServerPrivateKey)); err != nil {
+			logrus.Fatal("error in ListenAndServe: ", err)
+		}
+	}()
+
+	for _, v := range udpConns {
+		lb.AddItem(v)
+		go server.ProcessConn(v)
+	}
+
+	tcpConns, err := netutil.ListenTCP(config.Bind)
+	if err != nil {
+		logrus.Fatal("failed to listen on udp socket: ", err)
+	}
+	for _, v := range tcpConns {
+		go server.ListenTCP(v)
+	}
+
+	server.tcpConns = tcpConns
+	server.udpConns = udpConns
+	server.http = s
+
+	return server
+}
+
 type HttpSettingsResp struct {
 	AccessPoints []string `json:"access_points"`
 }
@@ -145,7 +160,7 @@ func (r *Server) HttpHandler(ctx *fasthttp.RequestCtx) {
 		}
 	}()
 
-	tkn, err := signal.VerifyClientJoinToken(r.config, utils.B2S(ctx.Request.Header.Peek("authentication")))
+	tkn, err := helpers.VerifyClientJoinToken(r.config, utils.B2S(ctx.Request.Header.Peek("authentication")))
 	if err != nil {
 		logrus.Error("bad token: ", err.Error(), utils.B2S(ctx.Request.Header.Peek("authentication")))
 		ctx.SetStatusCode(403)
@@ -289,7 +304,7 @@ func (r *Server) ProcessConn(nConn net.Conn) {
 		addr  *net.UDPAddr
 		err   error
 		isTcp bool
-		rConn *conn_store.Conn
+		rConn conn_store.Conn
 	)
 
 	defer func() {
@@ -304,8 +319,7 @@ outer:
 		case *net.UDPConn:
 			addr, err = relayPc.ReadUDP(c)
 			if err != nil {
-				logrus.Warn("read err: ", err)
-				continue outer
+				return
 			}
 		case *net.TCPConn:
 			err = relayPc.ReadTCP(c)
@@ -351,7 +365,7 @@ outer:
 					logrus.Debug("pong packet: ", fmt.Sprintf("%s:%s", destIp.String(), id.String()))
 					resp := v.(*pingEvent)
 					if resp.isUDP {
-						_, err = resp.conn.(*net.UDPConn).WriteToUDP(stdPc.ToUDP(), resp.addr)
+						_, err = resp.conn.(netconn.UDPConn).WriteToUDP(stdPc.ToUDP(), resp.addr)
 					} else {
 						_, err = resp.conn.Write(stdPc.ToTCP())
 					}
@@ -443,7 +457,7 @@ outer:
 				logrus.Debugf("tcp control packet from %s %s", node.Name, node.IP)
 			} else {
 				c.RegisterPingUDP(addr)
-				_, err := nConn.(*net.UDPConn).WriteToUDP(relayPc.ToUDP(), addr)
+				_, err := nConn.(netconn.UDPConn).WriteToUDP(relayPc.ToUDP(), addr)
 				if err != nil {
 					logrus.Warn("failed to respond to ping: ", err)
 					continue
@@ -465,4 +479,16 @@ func (r *Server) ListenTCP(ln *net.TCPListener) {
 		}
 		go r.ProcessConn(conn)
 	}
+}
+
+func (r *Server) Stop() {
+	for _, v := range r.tcpConns {
+		_ = v.Close()
+	}
+	for _, v := range r.udpConns {
+		_ = v.Close()
+	}
+
+	r.http.CloseOnShutdown = true
+	_ = r.http.Shutdown()
 }

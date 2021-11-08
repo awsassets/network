@@ -7,19 +7,41 @@ import (
 	"github.com/disembark/network/src/cache"
 )
 
-type Store struct {
-	cache *cache.Cache
+type EventStore struct {
+	cache cache.Cache
 	mtx   *sync.Mutex
 }
 
-func New() *Store {
-	return &Store{
+type MockEventStore struct {
+	StopFunc     func()
+	RegisterFunc func(name string) bool
+}
+
+func (e MockEventStore) Stop() {
+	e.StopFunc()
+}
+
+func (e MockEventStore) Register(name string) bool {
+	return e.RegisterFunc(name)
+}
+
+type Store interface {
+	Stop()
+	Register(name string) bool
+}
+
+func New() Store {
+	return &EventStore{
 		cache: cache.New(time.Hour, time.Hour*12),
 		mtx:   &sync.Mutex{},
 	}
 }
 
-func (e *Store) Register(name string) bool {
+func (e *EventStore) Stop() {
+	e.cache.Stop()
+}
+
+func (e *EventStore) Register(name string) bool {
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
 	if _, ok := e.cache.Get(name); ok {

@@ -9,10 +9,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/disembark/network/src/loadbalancer"
+	"github.com/disembark/network/src/netconn"
 	"github.com/disembark/network/src/netutil"
 	"github.com/disembark/network/src/packet"
 	"github.com/disembark/network/src/utils"
@@ -25,38 +25,67 @@ import (
 	node_store "github.com/disembark/network/src/store/node"
 )
 
-type Store struct {
-	mp    *sync.Map
-	nodes *node_store.Store
-	aes   *aes_store.Store
-	ourIP *string
+var ErrNoRoute = fmt.Errorf("unable to route")
+
+type Conn interface {
+	Aes() aes_store.Key
+	WriteUDP(pkt packet.TcpPacket) error
+	WriteTCP(pkt packet.TcpPacket) error
+	LastUsed() time.Time
+	IP() string
+	Name() string
+	Stop()
 }
 
-func New(nodes *node_store.Store, ourIP *string) *Store {
-	s := &Store{
-		mp: &sync.Map{},
-
-		nodes: nodes,
-		aes:   aes_store.New(),
-		ourIP: ourIP,
-	}
-
-	go s.runner()
-
-	return s
+type MockConnInstance struct {
+	AesFunc      func() aes_store.Key
+	WriteUDPFunc func(pkt packet.TcpPacket) error
+	WriteTCPFunc func(pkt packet.TcpPacket) error
+	LastUsedFunc func() time.Time
+	IPFunc       func() string
+	NameFunc     func() string
+	StopFunc     func()
 }
 
-type Conn struct {
+func (c MockConnInstance) Aes() aes_store.Key {
+	return c.AesFunc()
+}
+
+func (c MockConnInstance) WriteUDP(pkt packet.TcpPacket) error {
+	return c.WriteUDPFunc(pkt)
+}
+
+func (c MockConnInstance) WriteTCP(pkt packet.TcpPacket) error {
+	return c.WriteTCPFunc(pkt)
+}
+
+func (c MockConnInstance) LastUsed() time.Time {
+	return c.LastUsedFunc()
+}
+
+func (c MockConnInstance) IP() string {
+	return c.IPFunc()
+}
+
+func (c MockConnInstance) Name() string {
+	return c.NameFunc()
+}
+
+func (c MockConnInstance) Stop() {
+	c.StopFunc()
+}
+
+type ConnInstance struct {
 	name   string
 	ip     string
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	connUdp *loadbalancer.LoadBalancer
-	connTcp *loadbalancer.LoadBalancer
+	connUdp loadbalancer.LoadBalancer
+	connTcp loadbalancer.LoadBalancer
 
-	nodes *node_store.Store
-	aes   *aes_store.Store
+	nodes node_store.Store
+	aes   aes_store.Store
 	ourIP *string
 
 	deleted  bool
@@ -64,86 +93,12 @@ type Conn struct {
 
 	lastWarnTCP time.Time
 	lastWarnUDP time.Time
+
+	forceUDP bool
+	forceTCP bool
 }
 
-func (c *Store) Stop(ip string) {
-	if v, ok := c.mp.LoadAndDelete(ip); ok {
-		conn := v.(*Conn)
-		conn.deleted = true
-
-		logrus.Debugf("cleaning up connection: %s - %s", conn.name, conn.ip)
-
-		conn.cancel()
-	}
-}
-
-func (c *Store) Get(ip string) *Conn {
-	if v, ok := c.mp.Load(ip); ok {
-		return v.(*Conn)
-	}
-
-	return nil
-}
-
-func (c *Store) New(ip string) *Conn {
-	node, ok := c.nodes.GetNode(ip)
-	if !ok {
-		return nil
-	}
-
-	conn := &Conn{
-		ip:       node.IP,
-		name:     node.Name,
-		nodes:    c.nodes,
-		aes:      c.aes,
-		ourIP:    c.ourIP,
-		lastUsed: time.Now(),
-	}
-
-	if v, ok := c.mp.LoadOrStore(node.IP, conn); ok {
-		return v.(*Conn)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	conn.ctx = ctx
-	conn.cancel = cancel
-
-	c.aes.GetOrNew(node.Name)
-
-	go func() {
-		conn.manageUDP()
-		c.Stop(conn.ip)
-	}()
-
-	go func() {
-		conn.manageTCP()
-		c.Stop(conn.ip)
-	}()
-
-	return conn
-}
-
-func (c *Store) runner() {
-	tick := time.NewTicker(time.Minute * 5)
-	for range tick.C {
-		c.cleanup()
-	}
-}
-
-func (c *Store) cleanup() {
-	c.mp.Range(func(key, value interface{}) bool {
-		conn := value.(*Conn)
-
-		if conn.lastUsed.Before(time.Now().Add(-time.Minute * 10)) {
-			c.Stop(conn.ip)
-		}
-
-		return true
-	})
-}
-
-func (c *Conn) manageTCP() {
+func (c *ConnInstance) manageTCP() {
 	first := true
 	pc := packet.NewConstructor()
 	for {
@@ -192,7 +147,7 @@ func (c *Conn) manageTCP() {
 			defer lCancel()
 			defer close(pongCh)
 
-			c.connTcp = loadbalancer.NewLoadBalancer()
+			c.connTcp = loadbalancer.New()
 			for _, v := range conns {
 				c.connTcp.AddItem(v)
 				go func(conn *net.TCPConn) {
@@ -306,7 +261,7 @@ func (c *Conn) manageTCP() {
 	}
 }
 
-func (c *Conn) manageUDP() {
+func (c *ConnInstance) manageUDP() {
 	tick := time.NewTicker(time.Second * 5)
 	defer tick.Stop()
 	pongCh := make(chan packet.Packet, 100)
@@ -326,7 +281,7 @@ func (c *Conn) manageUDP() {
 			for _, ip := range node.AdvertiseAddresses {
 				if c.connUdp != nil {
 					for _, v := range c.connUdp.GetItems() {
-						_ = v.(*net.UDPConn).Close()
+						_ = v.(netconn.UDPConn).Close()
 					}
 					c.connUdp = nil
 				}
@@ -354,11 +309,11 @@ func (c *Conn) manageUDP() {
 
 					pings := map[string]string{}
 
-					var lb *loadbalancer.LoadBalancer
+					var lb loadbalancer.LoadBalancer
 					if c.connUdp != nil {
 						lb = c.connUdp
 					} else {
-						lb = loadbalancer.NewLoadBalancer()
+						lb = loadbalancer.New()
 
 						conns, err := netutil.DialUDP("", ip)
 						if err != nil {
@@ -366,7 +321,7 @@ func (c *Conn) manageUDP() {
 						}
 						for _, v := range conns {
 							lb.AddItem(v)
-							go func(conn *net.UDPConn) {
+							go func(conn netconn.UDPConn) {
 								pc := packet.NewConstructor()
 								for {
 									_, err := pc.ReadUDP(conn)
@@ -400,7 +355,7 @@ func (c *Conn) manageUDP() {
 
 						pings[id.String()] = ip
 
-						if _, err := lb.GetNext().(*net.UDPConn).Write(pc.ToUDP()); err != nil {
+						if _, err := lb.GetNext().(netconn.UDPConn).Write(pc.ToUDP()); err != nil {
 							logrus.Error("failed to write: ", err)
 						}
 
@@ -489,13 +444,13 @@ func (c *Conn) manageUDP() {
 	}
 }
 
-func (c *Conn) Aes() *aes_store.Key {
+func (c *ConnInstance) Aes() aes_store.Key {
 	return c.aes.Get(c.name)
 }
 
-func (c *Conn) WriteUDP(pkt packet.TcpPacket) error {
-	if c.connUdp == nil {
-		if c.connTcp == nil {
+func (c *ConnInstance) WriteUDP(pkt packet.TcpPacket) error {
+	if c.connUdp == nil || c.forceTCP {
+		if c.connTcp == nil || c.forceUDP {
 			// fallback to udp if we cannot use tcp
 			if c.lastWarnUDP.Before(time.Now().Add(-time.Second * 5)) {
 				logrus.Warnf("both udp and tcp seem to be down for node: %s - %s", c.name, c.ip)
@@ -503,7 +458,7 @@ func (c *Conn) WriteUDP(pkt packet.TcpPacket) error {
 			} else {
 				logrus.Debugf("both udp and tcp seem to be down for node:  %s - %s", c.name, c.ip)
 			}
-			return fmt.Errorf("unable to route")
+			return ErrNoRoute
 		}
 
 		// fallback to udp if we cannot use tcp
@@ -521,8 +476,8 @@ func (c *Conn) WriteUDP(pkt packet.TcpPacket) error {
 		panic(fmt.Errorf("bad packet length %d", len(pkt)))
 	}
 
-	logrus.Debugf("writing udp packet to %s - %s", c.name, c.ip)
-	_, err := c.connUdp.GetNext().(*net.UDPConn).Write(pkt.ToPacket())
+	logrus.Debugf("writing udp packet (%d) to %s - %s", pkt.ToPacket().Type(), c.name, c.ip)
+	_, err := c.connUdp.GetNext().(netconn.UDPConn).Write(pkt.ToPacket())
 
 	c.lastUsed = time.Now()
 	c.aes.Revive(c.name)
@@ -530,9 +485,9 @@ func (c *Conn) WriteUDP(pkt packet.TcpPacket) error {
 	return err
 }
 
-func (c *Conn) WriteTCP(pkt packet.TcpPacket) error {
-	if c.connTcp == nil {
-		if c.connUdp == nil {
+func (c *ConnInstance) WriteTCP(pkt packet.TcpPacket) error {
+	if c.connTcp == nil || c.forceUDP {
+		if c.connUdp == nil || c.forceTCP {
 			// fallback to udp if we cannot use tcp
 			if c.lastWarnTCP.Before(time.Now().Add(-time.Second * 5)) {
 				logrus.Warnf("both udp and tcp seem to be down for node: %s - %s", c.name, c.ip)
@@ -540,7 +495,7 @@ func (c *Conn) WriteTCP(pkt packet.TcpPacket) error {
 			} else {
 				logrus.Debugf("both udp and tcp seem to be down for node:  %s - %s", c.name, c.ip)
 			}
-			return fmt.Errorf("unable to route")
+			return ErrNoRoute
 		}
 
 		// fallback to udp if we cannot use tcp
@@ -558,11 +513,28 @@ func (c *Conn) WriteTCP(pkt packet.TcpPacket) error {
 		panic(fmt.Errorf("bad packet length %d", len(pkt)))
 	}
 
-	logrus.Debugf("writing tcp packet to %s - %s", c.name, c.ip)
+	logrus.Debugf("writing tcp packet (%d) to %s - %s", pkt.ToPacket().Type(), c.name, c.ip)
 	_, err := c.connTcp.GetNext().(*net.TCPConn).Write(pkt)
 
 	c.lastUsed = time.Now()
 	c.aes.Revive(c.name)
 
 	return err
+}
+
+func (c *ConnInstance) LastUsed() time.Time {
+	return c.lastUsed
+}
+
+func (c *ConnInstance) IP() string {
+	return c.ip
+}
+
+func (c *ConnInstance) Name() string {
+	return c.name
+}
+
+func (c *ConnInstance) Stop() {
+	c.deleted = true
+	c.cancel()
 }

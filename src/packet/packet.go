@@ -3,7 +3,7 @@ package packet
 type PacketType byte
 
 const (
-	_ PacketType = iota
+	PacketTypeInvalid PacketType = iota
 	PacketTypeData
 	PacketTypePing
 	PacketTypePong
@@ -63,7 +63,7 @@ const (
 
 func (p Packet) Type() PacketType {
 	if len(p) == 0 {
-		return 0
+		return PacketTypeInvalid
 	}
 
 	return PacketType(p[0])

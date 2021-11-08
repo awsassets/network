@@ -1,6 +1,7 @@
 package dns_store
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -12,83 +13,122 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type Store struct {
-	records *cache.CacheArray
-	mtx     sync.Mutex
-	proxy   string
+type DnsStore struct {
+	records      cache.CacheArray
+	mtx          sync.Mutex
+	proxy        string
+	doneCtx      context.Context
+	cancel       context.CancelFunc
+	stopResolved chan struct{}
 }
 
-func New() *Store {
-	d := &Store{
-		records: cache.NewArray(time.Minute, time.Minute*30),
+type MockDnsStore struct {
+	StopFunc         func()
+	SetProxyFunc     func(proxy string)
+	StoreRecordFunc  func(hostname, ip string)
+	DeleteRecordFunc func(hostname string, ip string)
+}
+
+type Store interface {
+	Stop()
+	SetProxy(proxy string)
+	StoreRecord(hostname, ip string)
+	DeleteRecord(hostname string, ip string)
+}
+
+func (s MockDnsStore) Stop() {
+	s.StopFunc()
+}
+
+func (s MockDnsStore) SetProxy(proxy string) {
+	s.SetProxyFunc(proxy)
+}
+
+func (s MockDnsStore) StoreRecord(hostname, ip string) {
+	s.StoreRecordFunc(hostname, ip)
+}
+
+func (s MockDnsStore) DeleteRecord(hostname string, ip string) {
+	s.DeleteRecordFunc(hostname, ip)
+}
+
+func New(bind ...string) Store {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &DnsStore{
+		records:      cache.NewArray(time.Minute, time.Minute*30),
+		doneCtx:      ctx,
+		cancel:       cancel,
+		stopResolved: make(chan struct{}),
 	}
-	go d.start()
-	return d
+
+	if len(bind) == 0 {
+		go s.start("172.10.0.53:53")
+	} else {
+		go s.start(bind[0])
+	}
+
+	return s
 }
 
-func (s *Store) SetProxy(proxy string) {
+func (s *DnsStore) Stop() {
+	s.cancel()
+	<-s.stopResolved
+}
+
+func (s *DnsStore) SetProxy(proxy string) {
 	s.proxy = proxy
 }
 
-func fixHostname(hostname string) string {
-	idx := strings.IndexRune(hostname, '.')
+func (s *DnsStore) StoreRecord(hostname, ip string) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
 
-	if idx == len(hostname) || idx == -1 {
-		hostname = hostname + ".internal.disembark."
+	s.records.Store(fixHostname(hostname), ip, ip)
+	s.records.Store(prtHostname(ip), fixHostname(hostname), fixHostname(hostname))
+}
+
+func (s *DnsStore) DeleteRecord(hostname string, ip string) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
+	s.records.Delete(fixHostname(hostname), ip)
+	s.records.Delete(prtHostname(ip), fixHostname(hostname))
+}
+
+func (s *DnsStore) start(bind string) {
+	pl, err := net.ListenPacket("udp", bind)
+	if err != nil {
+		logrus.Fatal(err)
 	}
 
-	if !strings.HasSuffix(hostname, ".") {
-		return hostname + "."
+	ln, err := net.Listen("tcp", bind)
+	if err != nil {
+		logrus.Fatal(err)
 	}
-
-	return hostname
-}
-
-func prtHostname(ip string) string {
-	ipb := net.ParseIP(ip).To4()
-
-	for i := 0; i < len(ipb)/2; i++ {
-		ipb[i], ipb[len(ipb)-i-1] = ipb[len(ipb)-i-1], ipb[i]
-	}
-
-	return ipb.String() + ".in-addr.arpa."
-}
-
-func (d *Store) StoreRecord(hostname, ip string) {
-	d.mtx.Lock()
-	defer d.mtx.Unlock()
-
-	d.records.Store(fixHostname(hostname), ip, ip)
-	d.records.Store(prtHostname(ip), fixHostname(hostname), fixHostname(hostname))
-}
-
-func (d *Store) DeleteRecord(hostname string, ip string) {
-	d.mtx.Lock()
-	defer d.mtx.Unlock()
-
-	d.records.Delete(fixHostname(hostname), ip)
-	d.records.Delete(prtHostname(ip), fixHostname(hostname))
-}
-
-func (d *Store) start() {
-	udpServer := &dns.Server{Addr: "172.10.0.53:53", Net: "udp"}
-	tcpServer := &dns.Server{Addr: "172.10.0.53:53", Net: "tcp"}
-
-	dns.HandleFunc(".", d.handleDnsRequest)
 
 	go func() {
-		if err := udpServer.ListenAndServe(); err != nil {
-			logrus.Fatal(err)
+		if err := dns.ActivateAndServe(nil, pl, s); err != nil {
+			if s.doneCtx.Err() == nil {
+				logrus.Fatal(err)
+			}
 		}
 	}()
+
 	go func() {
-		if err := tcpServer.ListenAndServe(); err != nil {
-			logrus.Fatal(err)
+		if err := dns.ActivateAndServe(ln, nil, s); err != nil {
+			if s.doneCtx.Err() == nil {
+				logrus.Fatal(err)
+			}
 		}
 	}()
+
+	<-s.doneCtx.Done()
+	_ = pl.Close()
+	_ = ln.Close()
+	close(s.stopResolved)
 }
 
-func (d *Store) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
+func (s *DnsStore) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m := &dns.Msg{}
 	m.SetReply(r)
 	m.Compress = false
@@ -99,7 +139,7 @@ func (d *Store) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 			answer := false
 			switch q.Qtype {
 			case dns.TypeA:
-				if v, ok := d.records.GetFirst(q.Name); ok {
+				if v, ok := s.records.GetFirst(q.Name); ok {
 					rr, err := dns.NewRR(fmt.Sprintf("%s A %s", q.Name, v.(string)))
 					if err == nil {
 						m.Answer = append(m.Answer, rr)
@@ -110,7 +150,7 @@ func (d *Store) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				}
 			case dns.TypePTR:
-				if v, ok := d.records.GetFirst(q.Name); ok {
+				if v, ok := s.records.GetFirst(q.Name); ok {
 					rr, err := dns.NewRR(fmt.Sprintf("%s PTR %s", q.Name, v.(string)))
 					if err == nil {
 						m.Answer = append(m.Answer, rr)
@@ -121,13 +161,13 @@ func (d *Store) handleDnsRequest(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				}
 			}
-			if !answer && d.proxy != "" {
+			if !answer && s.proxy != "" {
 				queryMsg := &dns.Msg{}
 				r.CopyTo(queryMsg)
 
 				queryMsg.Question = []dns.Question{q}
 
-				msg, err := lookup(d.proxy, queryMsg)
+				msg, err := lookup(s.proxy, queryMsg)
 				if err != nil {
 					logrus.Error("dns error: ", err)
 					continue
@@ -158,4 +198,28 @@ func lookup(server string, m *dns.Msg) (*dns.Msg, error) {
 	}
 
 	return response, nil
+}
+
+func fixHostname(hostname string) string {
+	idx := strings.IndexRune(hostname, '.')
+
+	if idx == len(hostname) || idx == -1 {
+		hostname = hostname + ".internal.disembark."
+	}
+
+	if !strings.HasSuffix(hostname, ".") {
+		return hostname + "."
+	}
+
+	return hostname
+}
+
+func prtHostname(ip string) string {
+	ipb := net.ParseIP(ip).To4()
+
+	for i := 0; i < len(ipb)/2; i++ {
+		ipb[i], ipb[len(ipb)-i-1] = ipb[len(ipb)-i-1], ipb[i]
+	}
+
+	return ipb.String() + ".in-addr.arpa."
 }

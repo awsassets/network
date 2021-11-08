@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/disembark/network/src/configure"
+	"github.com/disembark/network/src/helpers"
 	"github.com/disembark/network/src/types"
 	"github.com/disembark/network/src/utils"
 	"github.com/fasthttp/websocket"
@@ -16,13 +17,37 @@ import (
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
-type Client struct {
+type SignalClient struct {
 	done chan struct{}
 	msgs chan types.Message
 	conn *websocket.Conn
 }
 
-func NewClient(ctx context.Context, config *configure.Config, addrs []string) *Client {
+type Client interface {
+	Messages() <-chan types.Message
+	Done() <-chan struct{}
+	Write(msg types.Message) error
+}
+
+type MockSignalClient struct {
+	MessagesFunc func() <-chan types.Message
+	DoneFunc     func() <-chan struct{}
+	WriteFunc    func(msg types.Message) error
+}
+
+func (s MockSignalClient) Messages() <-chan types.Message {
+	return s.MessagesFunc()
+}
+
+func (s MockSignalClient) Done() <-chan struct{} {
+	return s.DoneFunc()
+}
+
+func (s MockSignalClient) Write(msg types.Message) error {
+	return s.WriteFunc(msg)
+}
+
+func NewClient(ctx context.Context, config *configure.Config, addrs []string) Client {
 	switch config.Mode {
 	case configure.ModeNode:
 		if config.JoinToken == "" {
@@ -40,7 +65,7 @@ func NewClient(ctx context.Context, config *configure.Config, addrs []string) *C
 		TLSClientConfig:  utils.TlsConfig(config.SignalServerPublicKey),
 	}
 
-	cl := &Client{
+	cl := &SignalClient{
 		done: make(chan struct{}),
 		msgs: make(chan types.Message, 100),
 	}
@@ -85,15 +110,15 @@ func NewClient(ctx context.Context, config *configure.Config, addrs []string) *C
 	return cl
 }
 
-func (c *Client) Messages() <-chan types.Message {
+func (c *SignalClient) Messages() <-chan types.Message {
 	return c.msgs
 }
 
-func (c *Client) Done() <-chan struct{} {
+func (c *SignalClient) Done() <-chan struct{} {
 	return c.done
 }
 
-func (c *Client) Write(msg types.Message) error {
+func (c *SignalClient) Write(msg types.Message) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -124,7 +149,7 @@ func new(ctx context.Context, config *configure.Config, dialer websocket.Dialer,
 		})
 		header.Add("node", nodePl)
 	case configure.ModeRelayServer:
-		tkn, err := GenerateClientJoinToken(config, configure.ModeRelayServer, config.Name)
+		tkn, err := helpers.GenerateClientJoinToken(config, configure.ModeRelayServer, config.Name)
 		if err != nil {
 			logrus.Fatal("failed to make join token: ", err)
 		}

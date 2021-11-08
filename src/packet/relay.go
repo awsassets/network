@@ -7,6 +7,57 @@ import (
 	"github.com/google/uuid"
 )
 
+/*
+The relay packet is used to encapsulate data, ping, pong and exchange
+packets. This is used when there is a middleman proxying packets.
+
+The destination IP is the IP of the node where the packet is supposed to
+be. Then the packet Type is the start of a Packet Structure,
+Ig. data packet or an exchange packet.
+
+The structure looks like this.
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |      6        |          Destination IPv4 Address             :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :               |  Packet Type  |                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                    N Bytes Packet Specific                    :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :               |
+    +-+-+-+-+-+-+-+-+
+
+
+If the packet is a TCP packet then there are 2 extra bytes in front
+of this which deonte the total data left in the packet.
+Like this.
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |   BE uint16 remaining length  |       6       |  Destination  :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                IPv4 Address                   |  Packet Type  :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                    N Bytes Packet Specific                    :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	:                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+*/
+
 func (c *PacketConstructor) MakeRelayDataPacket(data []byte, ip net.IP, destIP net.IP) RelayPacket {
 	pkt := Packet(c.slice(RelayDataPacketHeaderLength + len(data)))
 
@@ -162,5 +213,9 @@ func (p RelayPacket) DestIP() net.IP {
 }
 
 func (p RelayPacket) ToPacket() Packet {
+	if len(p) < RelayPacketHeaderLength {
+		return nil
+	}
+
 	return Packet(p[RelayPacketHeaderLength:])
 }

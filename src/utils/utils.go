@@ -2,7 +2,7 @@ package utils
 
 import (
 	"crypto/rand"
-	"encoding/hex"
+	"encoding/base64"
 	"reflect"
 	"unsafe"
 )
@@ -41,14 +41,10 @@ func IsPowerOfTwo(n int64) bool {
 	return (n != 0) && ((n & (n - 1)) == 0)
 }
 
-// GenerateRandomString returns a URL-safe, base64 encoded
-// securely generated random string.
-// It will return an error if the system's secure random
-// number generator fails to function correctly, in which
-// case the caller should not continue.
+// GenerateRandomString returns a URL-safe
 func GenerateRandomString(s int) (string, error) {
 	b, err := GenerateRandomBytes(s)
-	return hex.EncodeToString(b), err
+	return base64.StdEncoding.EncodeToString(b)[s:], err
 }
 
 // b2s converts byte slice to a string without memory allocation.
@@ -65,6 +61,8 @@ func B2S(b []byte) string {
 //
 // Note it may break if string and/or slice header will change
 // in the future go versions.
+// Warning: Writing data into the array is not a good idea, as this will result in a segfault
+// This is really bad do not writing or modity the data in the array which is returned.
 func S2B(s string) (b []byte) {
 	/* #nosec G103 */
 	bh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
@@ -76,87 +74,10 @@ func S2B(s string) (b []byte) {
 	return b
 }
 
-func DifferentArray(a []string, b []string) bool {
-	if len(a) != len(b) {
-		return true
-	}
-	if len(a) == 0 {
-		return false
-	}
-	aM := make(map[string]int)
-	bM := make(map[string]int)
-	for _, v := range a {
-		aM[v] = 1
-	}
-	for _, v := range b {
-		bM[v] = 1
-		if _, ok := aM[v]; !ok {
-			return true
-		}
-	}
-	for k := range aM {
-		if _, ok := bM[k]; !ok {
-			return true
-		}
-	}
-	return false
-}
-
-func IsSliceArray(v interface{}) bool {
-	k := reflect.TypeOf(v).Kind()
-	return k == reflect.Slice || k == reflect.Array
-}
-
-func IsSliceArrayPointer(v interface{}) bool {
-	n := reflect.TypeOf(v)
-	k := n.Kind()
-	if k == reflect.Ptr {
-		k = n.Elem().Kind()
-		return k == reflect.Slice || k == reflect.Array
-	}
-	return false
-}
-
-func SliceIndexOf(s []string, val string) int {
-	for i, v := range s {
-		if v == val {
-			return i
-		}
-	}
-
-	return -1
-}
-
-func Contains(s []string, compare string) bool {
-	for _, v := range s {
-		if v == compare {
-			return true
-		}
-	}
-
-	return false
-}
-
-func IsPointer(v interface{}) bool {
-	return reflect.TypeOf(v).Kind() == reflect.Ptr
-}
-
 func StringPointer(s string) *string {
 	return &s
 }
 
-func Int32Pointer(i int32) *int32 {
-	return &i
-}
-
-func UInt32Pointer(i uint32) *uint32 {
-	return &i
-}
-
 func Int64Pointer(i int64) *int64 {
 	return &i
-}
-
-func BoolPointer(b bool) *bool {
-	return &b
 }

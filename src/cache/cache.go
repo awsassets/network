@@ -5,7 +5,22 @@ import (
 	"time"
 )
 
-type Cache struct {
+type Cache interface {
+	Stop()
+	Store(key string, value interface{})
+	Expire(key string, t time.Time)
+	StoreExpiry(key string, value interface{}, expiry time.Time)
+	Get(key string) (interface{}, bool)
+	StoreOrGet(key string, value interface{}) (interface{}, bool)
+	StoreOrGetExpire(key string, value interface{}, expiry time.Time) (interface{}, bool)
+	Merge(item CacheItem) (interface{}, bool)
+	Delete(key string)
+	GetDelete(key string) (interface{}, bool)
+	ItemsArray() []CacheItem
+	Items() map[string]CacheItem
+}
+
+type cache struct {
 	dirty   sync.Map
 	mtx     sync.Mutex
 	cleanup time.Duration
@@ -24,7 +39,7 @@ func (c CacheItem) Expired() bool {
 	return !c.Expiry.IsZero() && time.Now().After(c.Expiry)
 }
 
-func New(cleanup time.Duration, expire time.Duration) *Cache {
+func New(cleanup time.Duration, expire time.Duration) Cache {
 	if cleanup < 0 {
 		cleanup = 0
 	}
@@ -32,7 +47,7 @@ func New(cleanup time.Duration, expire time.Duration) *Cache {
 		expire = 0
 	}
 
-	c := &Cache{
+	c := &cache{
 		cleanup: cleanup,
 		expire:  expire,
 		doneCh:  make(chan struct{}),
@@ -44,7 +59,7 @@ func New(cleanup time.Duration, expire time.Duration) *Cache {
 	return c
 }
 
-func (c *Cache) Stop() {
+func (c *cache) Stop() {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	if c.isDone {
@@ -55,20 +70,16 @@ func (c *Cache) Stop() {
 	close(c.doneCh)
 }
 
-func (c *Cache) Store(key string, value interface{}) {
+func (c *cache) Store(key string, value interface{}) {
 	expiry := time.Time{}
 	if c.expire != 0 {
 		expiry = time.Now().Add(c.expire)
 	}
 
-	c.dirty.Store(key, CacheItem{
-		Key:    key,
-		Object: value,
-		Expiry: expiry,
-	})
+	c.StoreExpiry(key, value, expiry)
 }
 
-func (c *Cache) Expire(key string, t time.Time) {
+func (c *cache) Expire(key string, t time.Time) {
 	if v, ok := c.dirty.Load(key); ok {
 		item := v.(CacheItem)
 		item.Expiry = t
@@ -76,7 +87,7 @@ func (c *Cache) Expire(key string, t time.Time) {
 	}
 }
 
-func (c *Cache) StoreExpiry(key string, value interface{}, expiry time.Time) {
+func (c *cache) StoreExpiry(key string, value interface{}, expiry time.Time) {
 	if expiry.Before(time.Now()) {
 		return
 	}
@@ -88,7 +99,7 @@ func (c *Cache) StoreExpiry(key string, value interface{}, expiry time.Time) {
 	})
 }
 
-func (c *Cache) Get(key string) (interface{}, bool) {
+func (c *cache) Get(key string) (interface{}, bool) {
 	i, ok := c.dirty.Load(key)
 	if !ok {
 		return nil, false
@@ -103,7 +114,7 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 	return item.Object, true
 }
 
-func (c *Cache) StoreOrGet(key string, value interface{}) (interface{}, bool) {
+func (c *cache) StoreOrGet(key string, value interface{}) (interface{}, bool) {
 	expiry := time.Time{}
 	if c.expire != 0 {
 		expiry = time.Now().Add(c.expire)
@@ -112,7 +123,7 @@ func (c *Cache) StoreOrGet(key string, value interface{}) (interface{}, bool) {
 	return c.StoreOrGetExpire(key, value, expiry)
 }
 
-func (c *Cache) StoreOrGetExpire(key string, value interface{}, expiry time.Time) (interface{}, bool) {
+func (c *cache) StoreOrGetExpire(key string, value interface{}, expiry time.Time) (interface{}, bool) {
 	i, ok := c.dirty.LoadOrStore(key, CacheItem{
 		Key:    key,
 		Object: value,
@@ -135,7 +146,7 @@ func (c *Cache) StoreOrGetExpire(key string, value interface{}, expiry time.Time
 	return item.Object, true
 }
 
-func (c *Cache) Merge(item CacheItem) (interface{}, bool) {
+func (c *cache) Merge(item CacheItem) (interface{}, bool) {
 	old, load := c.dirty.LoadOrStore(item.Key, item)
 	if load {
 		oldItem := old.(CacheItem)
@@ -148,7 +159,7 @@ func (c *Cache) Merge(item CacheItem) (interface{}, bool) {
 	return nil, false
 }
 
-func (c *Cache) clean() {
+func (c *cache) clean() {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
@@ -162,7 +173,7 @@ func (c *Cache) clean() {
 	})
 }
 
-func (c *Cache) worker() {
+func (c *cache) worker() {
 	tick := time.NewTicker(c.cleanup)
 	for {
 		select {
@@ -174,11 +185,11 @@ func (c *Cache) worker() {
 	}
 }
 
-func (c *Cache) Delete(key string) {
+func (c *cache) Delete(key string) {
 	c.dirty.Delete(key)
 }
 
-func (c *Cache) GetDelete(key string) (interface{}, bool) {
+func (c *cache) GetDelete(key string) (interface{}, bool) {
 	if v, ok := c.dirty.LoadAndDelete(key); ok {
 		return v.(CacheItem).Object, true
 	}
@@ -186,7 +197,7 @@ func (c *Cache) GetDelete(key string) (interface{}, bool) {
 	return nil, false
 }
 
-func (c *Cache) ItemsArray() []CacheItem {
+func (c *cache) ItemsArray() []CacheItem {
 	items := []CacheItem{}
 	c.dirty.Range(func(key, value interface{}) bool {
 		item := value.(CacheItem)
@@ -201,7 +212,7 @@ func (c *Cache) ItemsArray() []CacheItem {
 	return items
 }
 
-func (c *Cache) Items() map[string]CacheItem {
+func (c *cache) Items() map[string]CacheItem {
 	items := map[string]CacheItem{}
 	c.dirty.Range(func(key, value interface{}) bool {
 		item := value.(CacheItem)

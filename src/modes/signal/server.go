@@ -2,7 +2,6 @@ package signal
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/hex"
 	"net/http"
 	"os"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/disembark/network/src/configure"
+	"github.com/disembark/network/src/helpers"
 	dhcp_store "github.com/disembark/network/src/store/dhcp"
 	event_store "github.com/disembark/network/src/store/event"
 	node_store "github.com/disembark/network/src/store/node"
@@ -28,10 +28,10 @@ import (
 type Server struct {
 	ctx context.Context
 
-	events *event_store.Store
-	dhcp   *dhcp_store.Store
-	node   *node_store.Store
-	signal *signal_store.Store
+	events event_store.Store
+	dhcp   dhcp_store.Store
+	node   node_store.Store
+	signal signal_store.Store
 
 	wg     *sync.WaitGroup
 	config *configure.Config
@@ -44,7 +44,10 @@ type Server struct {
 
 func NewServer(config *configure.Config) {
 	if config.SignalServerPrivateKey == "" || config.SignalServerPublicKey == "" {
-		GenerateCaTls(config)
+		helpers.GenerateCaTls(config)
+		if err := config.Save(); err != nil {
+			logrus.Fatalf("Failed to generate private key: %v", err)
+		}
 	}
 
 	if len(config.TokenKey) == 0 {
@@ -57,27 +60,39 @@ func NewServer(config *configure.Config) {
 	if config.Create != "" {
 		switch config.Create {
 		case configure.ModeNode:
-			clConf, err := GenerateNode(config, config.CreateName)
+			clConf, err := helpers.GenerateNode(config, config.CreateName)
 			if err != nil {
 				logrus.Fatalf("failed to listen: %v", err)
+			}
+			if err = clConf.Save(); err != nil {
+				logrus.Fatal("failed to save config: ", err)
 			}
 			logrus.Infof("wrote %s with a new node config", clConf.Config)
 		case configure.ModeSignal:
-			clConf, err := GenerateSignal(config, config.CreateName)
+			clConf, err := helpers.GenerateSignal(config, config.CreateName)
 			if err != nil {
 				logrus.Fatalf("failed to listen: %v", err)
+			}
+			if err = clConf.Save(); err != nil {
+				logrus.Fatal("failed to save config: ", err)
 			}
 			logrus.Infof("wrote %s with a new signal config", clConf.Config)
 		case configure.ModeRelayServer:
-			clConf, err := GenerateRelayServer(config, config.CreateName)
+			clConf, err := helpers.GenerateRelayServer(config, config.CreateName)
 			if err != nil {
 				logrus.Fatalf("failed to listen: %v", err)
 			}
+			if err = clConf.Save(); err != nil {
+				logrus.Fatal("failed to save config: ", err)
+			}
 			logrus.Infof("wrote %s with a new relay server config", clConf.Config)
 		case configure.ModeRelayClient:
-			clConf, err := GenerateRelayClient(config, config.CreateName)
+			clConf, err := helpers.GenerateRelayClient(config, config.CreateName)
 			if err != nil {
 				logrus.Fatalf("failed to listen: %v", err)
+			}
+			if err = clConf.Save(); err != nil {
+				logrus.Fatal("failed to save config: ", err)
 			}
 			logrus.Infof("wrote %s with a new relay client config", clConf.Config)
 		default:
@@ -86,66 +101,24 @@ func NewServer(config *configure.Config) {
 		return
 	}
 
-	gCtx, cancel := context.WithCancel(context.Background())
-
-	rootCAs := x509.NewCertPool()
-	if ok := rootCAs.AppendCertsFromPEM(utils.S2B(config.SignalServerPublicKey)); !ok {
-		logrus.Fatal("Bad Signal Server Public key")
-	}
-
-	wg := &sync.WaitGroup{}
-	events := event_store.New()
-
-	server := &Server{
-		ctx:    gCtx,
-		dhcp:   dhcp_store.New(),
-		node:   node_store.New(),
-		events: events,
-		signal: signal_store.New(gCtx, config, wg, websocket.Dialer{
-			Proxy:            http.ProxyFromEnvironment,
-			HandshakeTimeout: 2 * time.Second,
-			TLSClientConfig:  utils.TlsConfig(config.SignalServerPublicKey),
-		}),
-		wg:                wg,
-		config:            config,
-		nodeConnections:   &sync.Map{},
-		signalConnections: &sync.Map{},
-		upgrader: websocket.FastHTTPUpgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-		},
-	}
-
-	for _, v := range config.SignalServers {
-		tkn, err := GenerateClientJoinToken(config, configure.ModeSignal, config.Name)
-		if err != nil {
-			logrus.Fatal("failed to generate join token: ", err)
-		}
-
-		server.signal.Register(v, tkn)
-	}
-
-	go server.ProcessSignal()
-
-	// Create custom server.
-	s := &fasthttp.Server{
-		Handler: server.Handler,
-		Logger:  logrus.New(),
-		Name:    "disembark",
-	}
-
 	logrus.Info("starting signal server")
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		if err := s.ListenAndServeTLSEmbed(config.Bind, utils.S2B(config.SignalServerPublicKey), utils.S2B(config.SignalServerPrivateKey)); err != nil {
-			logrus.Fatal("error in ListenAndServe: ", err)
-		}
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	server := newServer(ctx, config)
+
+	server.signal = signal_store.New(ctx, config, server.wg, websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: 2 * time.Second,
+		TLSClientConfig:  utils.TlsConfig(config.SignalServerPublicKey),
+	})
+	go server.ProcessSignal()
 
 	done := make(chan struct{})
+
 	go func() {
 		<-c
 		cancel()
@@ -164,6 +137,51 @@ func NewServer(config *configure.Config) {
 	<-done
 	logrus.Info("shutdown")
 	os.Exit(0)
+}
+
+func newServer(ctx context.Context, config *configure.Config) *Server {
+	wg := &sync.WaitGroup{}
+	events := event_store.New()
+
+	server := &Server{
+		ctx:    ctx,
+		dhcp:   dhcp_store.New(),
+		node:   node_store.New(),
+		events: events,
+
+		wg:                wg,
+		config:            config,
+		nodeConnections:   &sync.Map{},
+		signalConnections: &sync.Map{},
+		upgrader: websocket.FastHTTPUpgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+		},
+	}
+
+	for _, v := range config.SignalServers {
+		tkn, err := helpers.GenerateClientJoinToken(config, configure.ModeSignal, config.Name)
+		if err != nil {
+			logrus.Fatal("failed to generate join token: ", err)
+		}
+
+		server.signal.Register(v, tkn)
+	}
+
+	// Create custom server.
+	s := &fasthttp.Server{
+		Handler: server.Handler,
+		Logger:  logrus.New(),
+		Name:    "disembark",
+	}
+
+	go func() {
+		if err := s.ListenAndServeTLSEmbed(config.Bind, utils.S2B(config.SignalServerPublicKey), utils.S2B(config.SignalServerPrivateKey)); err != nil {
+			logrus.Fatal("error in ListenAndServe: ", err)
+		}
+	}()
+
+	return server
 }
 
 func (s *Server) ProcessSignal() {

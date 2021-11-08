@@ -5,6 +5,53 @@ import (
 	"net"
 )
 
+/*
+The data packet is used to transfer packets such as UDP or TCP packets.
+The entire packet is stored within the data portion of the data packet.
+
+The structure looks like this.
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |      1        |                   IPv4 Address                :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :               |                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                  N bytes of packet payload                    :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+
+If the packet is a TCP packet then there are 2 extra bytes in front
+of this which deonte the total data left in the packet.
+Like this.
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |   BE uint16 remaining length  |       1       |      IPv4     :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                   Address                     |               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                  N bytes of packet payload                    :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	:                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+*/
+
 func (c *PacketConstructor) MakeDataPacket(data []byte, ip net.IP) DataPacket {
 	pkt := Packet(c.slice(DataPacketHeaderLength + len(data)))
 
@@ -36,7 +83,7 @@ func (c *PacketConstructor) MakeDataPacketSize(size int) DataPacket {
 }
 
 func (p DataPacket) Valid() bool {
-	return len(p) > DataPacketHeaderLength && Packet(p).Type() == PacketTypeData
+	return len(p) >= DataPacketHeaderLength && Packet(p).Type() == PacketTypeData
 }
 
 func (p DataPacket) IP() net.IP {

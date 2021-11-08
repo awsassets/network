@@ -1,32 +1,63 @@
 package loadbalancer
 
-import "sync/atomic"
+import (
+	"sync"
+)
 
-type LoadBalancer struct {
-	idx   *uint64
+type LoadBalancer interface {
+	GetNext() interface{}
+	GetItem(idx int) interface{}
+	GetItems() []interface{}
+	AddItem(item interface{})
+}
+
+type loadBalancer struct {
+	mtx   sync.Mutex
+	idx   uint64
 	items []interface{}
 }
 
-func NewLoadBalancer(items ...interface{}) *LoadBalancer {
-	zero := uint64(0)
-	return &LoadBalancer{
-		idx:   &zero,
+func New(items ...interface{}) LoadBalancer {
+	return &loadBalancer{
 		items: items,
 	}
 }
 
-func (l *LoadBalancer) GetNext() interface{} {
-	return l.items[atomic.AddUint64(l.idx, 1)%uint64(len(l.items))]
+func (l *loadBalancer) GetNext() interface{} {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	if len(l.items) == 0 {
+		return nil
+	}
+	o := l.idx
+
+	l.idx = (l.idx + 1) % uint64(len(l.items))
+
+	return l.items[o]
 }
 
-func (l *LoadBalancer) GetItem(idx int) interface{} {
+func (l *loadBalancer) GetItem(idx int) interface{} {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	if len(l.items) == 0 {
+		return nil
+	}
+
 	return l.items[idx%len(l.items)]
 }
 
-func (l *LoadBalancer) GetItems() []interface{} {
+func (l *loadBalancer) GetItems() []interface{} {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
 	return l.items
 }
 
-func (l *LoadBalancer) AddItem(item interface{}) {
+func (l *loadBalancer) AddItem(item interface{}) {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
 	l.items = append(l.items, item)
 }

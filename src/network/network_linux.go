@@ -1,4 +1,5 @@
 //go:build linux
+// +build linux
 
 package network
 
@@ -21,14 +22,15 @@ import (
 
 var nameServerRegex = regexp.MustCompile(`^nameserver ((?:[012]?[0-9]?[0-9])\.(?:[012]?[0-9]?[0-9])\.(?:[012]?[0-9]?[0-9])\.(?:[012]?[0-9]?[0-9])(?::\d+)?)`)
 
-type linuxTun struct {
-	lb   *loadbalancer.LoadBalancer
-	ip   string
-	mtx  sync.Mutex
-	name string
+type LinuxTun struct {
+	lb      loadbalancer.LoadBalancer
+	ip      string
+	mtx     sync.Mutex
+	name    string
+	stopped bool
 }
 
-func createTun() *linuxTun {
+func createTun() *LinuxTun {
 	extra := runtime.GOMAXPROCS(0) - 1
 
 	cfg := water.Config{
@@ -58,8 +60,8 @@ func createTun() *linuxTun {
 		raws[1+i] = iface
 	}
 
-	n := &linuxTun{
-		lb:   loadbalancer.NewLoadBalancer(raws...),
+	n := &LinuxTun{
+		lb:   loadbalancer.New(raws...),
 		name: iface.Name(),
 	}
 
@@ -67,7 +69,7 @@ func createTun() *linuxTun {
 	return n
 }
 
-func (n *linuxTun) SetIP(ip string) {
+func (n *LinuxTun) SetIP(ip string) {
 	n.mtx.Lock()
 	defer n.mtx.Unlock()
 
@@ -92,7 +94,7 @@ func (n *linuxTun) SetIP(ip string) {
 	n.ip = ip
 }
 
-func (n *linuxTun) GetRaws() []Device {
+func (n *LinuxTun) GetRaws() []Device {
 	items := n.lb.GetItems()
 
 	devs := make([]Device, len(items))
@@ -103,15 +105,15 @@ func (n *linuxTun) GetRaws() []Device {
 	return devs
 }
 
-func (n *linuxTun) GetIndex(idx int) Device {
+func (n *LinuxTun) GetIndex(idx int) Device {
 	return n.lb.GetItem(idx).(Device)
 }
 
-func (n *linuxTun) GetNext() Device {
+func (n *LinuxTun) GetNext() Device {
 	return n.lb.GetNext().(Device)
 }
 
-func (n *linuxTun) configTun() {
+func (n *LinuxTun) configTun() {
 	n.mtx.Lock()
 	defer n.mtx.Unlock()
 
@@ -129,7 +131,7 @@ func (n *linuxTun) configTun() {
 	}
 }
 
-func (n *linuxTun) ConfigureDNS() (string, error) {
+func (n *LinuxTun) ConfigureDNS() (string, error) {
 	n.mtx.Lock()
 	defer n.mtx.Unlock()
 
@@ -182,6 +184,23 @@ func (n *linuxTun) ConfigureDNS() (string, error) {
 	return proxy, os.WriteFile("/etc/resolv.conf", utils.S2B(strings.Join(refinedLines, "\n")), 0600)
 }
 
-func (n *linuxTun) Name() string {
+func (n *LinuxTun) Name() string {
 	return n.name
+}
+
+func (n *LinuxTun) Stop() error {
+	n.mtx.Lock()
+	defer n.mtx.Unlock()
+
+	if n.stopped {
+		return nil
+	}
+
+	for _, v := range n.lb.GetItems() {
+		_ = v.(*water.Interface).Close()
+	}
+
+	n.stopped = true
+
+	return nil
 }

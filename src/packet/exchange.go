@@ -5,6 +5,52 @@ import (
 	"net"
 )
 
+/*
+The exchange packet is used to exchange an AES key used to encrypt data packets.
+
+The structure looks like this.
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |       5       |                   IPv4 Address                :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :               |                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                  N bytes of packet payload                    :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+
+If the packet is a TCP packet then there are 2 extra bytes in front
+of this which deonte the total data left in the packet.
+Like this.
+
+     0                   1                   2                   3
+     0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    |   BE uint16 remaining length  |       5       |     IPv4      :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                   Address                     |               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                  N bytes of packet payload                    :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    :                                                               :
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	:                               |
+    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+*/
+
 func (c *PacketConstructor) MakeExchangePacket(data []byte, ip net.IP) ExchangePacket {
 	pkt := Packet(c.slice(ExchangePacketHeaderLength + len(data)))
 
@@ -22,7 +68,7 @@ func (c *PacketConstructor) MakeExchangePacket(data []byte, ip net.IP) ExchangeP
 }
 
 func (p ExchangePacket) Valid() bool {
-	return len(p) > ExchangePacketHeaderLength && Packet(p).Type() == PacketTypeExchange
+	return len(p) >= ExchangePacketHeaderLength && Packet(p).Type() == PacketTypeExchange
 }
 
 func (p ExchangePacket) IP() net.IP {
