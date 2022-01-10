@@ -8,7 +8,7 @@ require (
 	github.com/fasthttp/websocket v1.4.3
 	github.com/go-ping/ping v0.0.0-20211014180314-6e2b003bffdd
 	github.com/json-iterator/go v1.1.12
-	github.com/mattn/go-colorable v0.1.11
+	github.com/mattn/go-colorable v0.1.12
 	github.com/miekg/dns v1.1.43
 	github.com/rifflock/lfshook v0.0.0-20180920164130-b9218ef580f5
 	github.com/sirupsen/logrus v1.8.1
@@ -29,7 +29,7 @@ require (
 	github.com/klauspost/compress v1.13.6 // indirect
 	github.com/magiconair/properties v1.8.5 // indirect
 	github.com/mattn/go-isatty v0.0.14 // indirect
-	github.com/mitchellh/mapstructure v1.4.2 // indirect
+	github.com/mitchellh/mapstructure v1.4.3 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pelletier/go-toml v1.9.4 // indirect
@@ -43,7 +43,7 @@ require (
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
 	golang.org/x/text v0.3.8-0.20211004125949-5bd84dd9b33b // indirect
 	golang.zx2c4.com/wintun v0.0.0-20211104114900-415007cec224 // indirect
-	gopkg.in/ini.v1 v1.63.2 // indirect
+	gopkg.in/ini.v1 v1.66.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
@@ -52,8 +52,8 @@ require (
 	github.com/bugsnag/panicwrap v1.3.4
 	github.com/google/uuid v1.3.0
 	github.com/libp2p/go-reuseport v0.1.0
-	github.com/spf13/viper v1.9.0
-	golang.org/x/sys v0.0.0-20211107104306-e0b2ad06fe42
+	github.com/spf13/viper v1.10.1
+	golang.org/x/sys v0.0.0-20211210111614-af8b64212486
 	golang.zx2c4.com/wireguard v0.0.0-20211106133050-23d4e52ac97f
 	golang.zx2c4.com/wireguard/windows v0.5.1
 )
