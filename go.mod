@@ -5,7 +5,7 @@ go 1.17
 require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/ethereum/go-ethereum v1.10.11
-	github.com/fasthttp/websocket v1.4.3
+	github.com/fasthttp/websocket v1.4.4
 	github.com/go-ping/ping v0.0.0-20211014180314-6e2b003bffdd
 	github.com/json-iterator/go v1.1.12
 	github.com/mattn/go-colorable v0.1.11
@@ -34,7 +34,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pelletier/go-toml v1.9.4 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/savsgio/gotils v0.0.0-20200608150037-a5f6f5aef16c // indirect
+	github.com/savsgio/gotils v0.0.0-20211223103454-d0aaa54c5899 // indirect
 	github.com/spf13/afero v1.6.0 // indirect
 	github.com/spf13/cast v1.4.1 // indirect
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
