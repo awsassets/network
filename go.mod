@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/davecgh/go-spew v1.1.1
-	github.com/ethereum/go-ethereum v1.10.11
+	github.com/ethereum/go-ethereum v1.10.15
 	github.com/fasthttp/websocket v1.4.3
 	github.com/go-ping/ping v0.0.0-20211014180314-6e2b003bffdd
 	github.com/json-iterator/go v1.1.12
