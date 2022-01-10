@@ -8,7 +8,7 @@ require (
 	github.com/fasthttp/websocket v1.4.3
 	github.com/go-ping/ping v0.0.0-20211014180314-6e2b003bffdd
 	github.com/json-iterator/go v1.1.12
-	github.com/mattn/go-colorable v0.1.11
+	github.com/mattn/go-colorable v0.1.12
 	github.com/miekg/dns v1.1.43
 	github.com/rifflock/lfshook v0.0.0-20180920164130-b9218ef580f5
 	github.com/sirupsen/logrus v1.8.1
